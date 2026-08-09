@@ -6,7 +6,6 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/gorilla/websocket v1.5.3
 	github.com/grandcat/zeroconf v1.0.0
 )
 
