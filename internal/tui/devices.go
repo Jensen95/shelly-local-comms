@@ -81,7 +81,7 @@ func newDevicesModel(mgr app.Manager) devicesModel {
 
 func (d devicesModel) capturing() bool { return d.mode != devModeTable }
 
-func (d *devicesModel) setSize(w, h int) {
+func (d *devicesModel) setSize(_, h int) {
 	if h < 5 {
 		h = 5
 	}

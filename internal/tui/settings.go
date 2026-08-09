@@ -471,7 +471,7 @@ func (s settingsModel) viewMenu() string {
 			cursor = styleCursor.Render("> ")
 			title = styleCursor.Render(title)
 		}
-		b.WriteString(fmt.Sprintf("%s%s — %s\n", cursor, title, styleLabel.Render(e.desc)))
+		fmt.Fprintf(&b, "%s%s — %s\n", cursor, title, styleLabel.Render(e.desc))
 		if s.sectionStatus[i] != "" {
 			line := "    " + s.sectionStatus[i]
 			if s.sectionErr[i] {

@@ -436,7 +436,7 @@ func TestLinkWizardInvalidParamsJSON(t *testing.T) {
 	// Fix the JSON and save successfully.
 	m = press(t, m, "ctrl+u")
 	m = typeText(t, m, `{"id":1}`)
-	m = press(t, m, "enter", "enter")
+	press(t, m, "enter", "enter")
 	if len(f.savedLinks) != 1 {
 		t.Fatalf("SaveLink called %d times after fix, want 1", len(f.savedLinks))
 	}
@@ -526,7 +526,7 @@ func TestDeleteLinkWithConfirm(t *testing.T) {
 	}
 
 	// Then confirm.
-	m = press(t, m, "x", "y")
+	press(t, m, "x", "y")
 	if len(f.deletedLinks) != 1 || f.deletedLinks[0] != "l1" {
 		t.Fatalf("DeleteLink ids = %v, want [l1]", f.deletedLinks)
 	}
@@ -600,7 +600,7 @@ func TestSettingsBLEApply(t *testing.T) {
 	mustContain(t, m.View(), "Observer mode")
 
 	m = press(t, m, "down", "down", "space") // toggle observer on
-	m = press(t, m, "down", "enter")         // apply
+	press(t, m, "down", "enter")             // apply
 
 	if len(f.bleApplied) != 1 {
 		t.Fatalf("ApplyBLE called %d times, want 1", len(f.bleApplied))

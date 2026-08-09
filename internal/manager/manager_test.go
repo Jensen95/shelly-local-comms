@@ -63,7 +63,7 @@ func (f *fakeDevice) handler() http.HandlerFunc {
 	}
 }
 
-func newTestManager(t *testing.T) (*Manager, *fakeDevice, *fakeDevice) {
+func newTestManager(t *testing.T) (*Manager, *fakeDevice) {
 	t.Helper()
 	src := &fakeDevice{t: t, id: "shelly-src"}
 	tgt := &fakeDevice{t: t, id: "shelly-tgt"}
@@ -84,11 +84,11 @@ func newTestManager(t *testing.T) (*Manager, *fakeDevice, *fakeDevice) {
 	if _, err := m.AddDevice(ctx, strings.TrimPrefix(tgtSrv.URL, "http://"), ""); err != nil {
 		t.Fatalf("add target: %v", err)
 	}
-	return m, src, tgt
+	return m, src
 }
 
 func TestAddDeviceFillsInfo(t *testing.T) {
-	m, _, _ := newTestManager(t)
+	m, _ := newTestManager(t)
 	devs := m.Devices()
 	if len(devs) != 2 {
 		t.Fatalf("want 2 devices, got %d", len(devs))
@@ -99,7 +99,7 @@ func TestAddDeviceFillsInfo(t *testing.T) {
 }
 
 func TestSaveLinkValidatesAndDefaults(t *testing.T) {
-	m, _, _ := newTestManager(t)
+	m, _ := newTestManager(t)
 
 	if _, err := m.SaveLink(app.Link{SourceDevice: "nope", TargetDevice: "shelly-tgt",
 		SourceComponent: "input:0", SourceEvent: "toggle", TargetMethod: "Switch.Toggle"}); err == nil {
@@ -123,7 +123,7 @@ func TestSaveLinkValidatesAndDefaults(t *testing.T) {
 }
 
 func TestDeployLinkPersistsScriptID(t *testing.T) {
-	m, src, _ := newTestManager(t)
+	m, src := newTestManager(t)
 	l, err := m.SaveLink(app.Link{ID: "l1", SourceDevice: "shelly-src", TargetDevice: "shelly-tgt",
 		SourceComponent: "input:0", SourceEvent: "toggle", TargetMethod: "Switch.Toggle",
 		TargetParams: map[string]any{"id": 0}})
@@ -154,7 +154,7 @@ func TestDeployLinkPersistsScriptID(t *testing.T) {
 }
 
 func TestRemoveDeviceGuardedByLinks(t *testing.T) {
-	m, _, _ := newTestManager(t)
+	m, _ := newTestManager(t)
 	if _, err := m.SaveLink(app.Link{SourceDevice: "shelly-src", TargetDevice: "shelly-tgt",
 		SourceComponent: "input:0", SourceEvent: "toggle", TargetMethod: "Switch.Toggle"}); err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ func TestRemoveDeviceGuardedByLinks(t *testing.T) {
 }
 
 func TestJoinExtenderRequiresActiveExtender(t *testing.T) {
-	m, _, _ := newTestManager(t)
+	m, _ := newTestManager(t)
 	err := m.JoinExtender(context.Background(), "shelly-src", "shelly-tgt")
 	if err == nil || !strings.Contains(err.Error(), "not an active range extender") {
 		t.Fatalf("expected inactive-extender error, got %v", err)

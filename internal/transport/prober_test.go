@@ -48,12 +48,6 @@ func (f *fakeCaller) set(rtt time.Duration, err error) {
 	f.mu.Unlock()
 }
 
-func (f *fakeCaller) callCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls
-}
-
 func (f *fakeCaller) Call(ctx context.Context, method string, params, out any) error {
 	if method != "Shelly.GetDeviceInfo" {
 		return errors.New("unexpected method " + method)

@@ -45,7 +45,7 @@ func newHealthModel(mgr app.Manager) healthModel {
 
 func (h healthModel) capturing() bool { return false }
 
-func (h *healthModel) setSize(w, ht int) {
+func (h *healthModel) setSize(_, ht int) {
 	if ht < 7 {
 		ht = 7
 	}

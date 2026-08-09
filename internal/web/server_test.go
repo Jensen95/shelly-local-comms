@@ -170,7 +170,7 @@ func do(t *testing.T, ts *httptest.Server, method, path, body string) *http.Resp
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
-	t.Cleanup(func() { res.Body.Close() })
+	t.Cleanup(func() { _ = res.Body.Close() })
 	return res
 }
 

@@ -64,9 +64,9 @@ func run(args []string) error {
 		}
 		devs := m.Devices()
 		w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tADDRESS\tMODEL\tGEN\tSOURCE")
+		_, _ = fmt.Fprintln(w, "ID\tADDRESS\tMODEL\tGEN\tSOURCE")
 		for _, d := range devs {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", d.Key(), d.Addr, d.Info.Model, d.Info.Gen, d.Source)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", d.Key(), d.Addr, d.Info.Model, d.Info.Gen, d.Source)
 		}
 		if err := w.Flush(); err != nil {
 			return err
