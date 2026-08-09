@@ -1,0 +1,6 @@
+/shellyctl
+/dist/
+*.test
+coverage.out
+.idea/
+.vscode/
