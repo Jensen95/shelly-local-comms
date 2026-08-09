@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shellyctl</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar">
+    <div class="brand">shelly<span>ctl</span></div>
+    <button class="nav-btn active" data-view="devices">Devices</button>
+    <button class="nav-btn" data-view="links">Links</button>
+    <button class="nav-btn" data-view="health">Health</button>
+    <button class="nav-btn" data-view="settings">Settings</button>
+  </nav>
+
+  <main class="content">
+
+    <!-- Devices -->
+    <section id="view-devices" class="view active">
+      <header class="view-head">
+        <h1>Devices</h1>
+        <button id="discover-btn" class="btn primary">Discover</button>
+      </header>
+      <div id="device-list" class="card-grid"></div>
+      <div class="panel">
+        <h2>Add device</h2>
+        <form id="add-device-form" class="form-row">
+          <label>Address
+            <input name="addr" type="text" placeholder="192.168.1.50" required>
+          </label>
+          <label>Password <span class="muted">(optional)</span>
+            <input name="password" type="password" autocomplete="off">
+          </label>
+          <button type="submit" class="btn primary">Add</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Links -->
+    <section id="view-links" class="view">
+      <header class="view-head">
+        <h1>Links</h1>
+      </header>
+      <div class="table-wrap">
+        <table id="links-table">
+          <thead>
+            <tr><th>Name</th><th>Trigger</th><th>Fallback</th><th>Deployed</th><th></th></tr>
+          </thead>
+          <tbody id="links-body"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h2 id="link-form-title">New link</h2>
+        <form id="link-form">
+          <input type="hidden" name="id">
+          <div class="form-grid">
+            <label>Name
+              <input name="name" type="text" placeholder="hall switch → lamp">
+            </label>
+            <label>Source device
+              <select name="source_device" data-devices required></select>
+            </label>
+            <label>Source component
+              <input name="source_component" type="text" value="input:0">
+            </label>
+            <label>Event
+              <select name="source_event">
+                <option value="toggle">toggle</option>
+                <option value="single_push">single_push</option>
+                <option value="double_push">double_push</option>
+                <option value="long_push">long_push</option>
+              </select>
+            </label>
+            <label>Target device
+              <select name="target_device" data-devices required></select>
+            </label>
+            <label>Target method
+              <input name="target_method" type="text" value="Switch.Toggle">
+            </label>
+            <label class="span2">Target params (JSON)
+              <textarea name="target_params" rows="2" placeholder='{"id":0,"on":true}'></textarea>
+            </label>
+            <label>Base timeout (ms)
+              <input name="base_timeout_ms" type="number" min="0" value="400">
+            </label>
+            <label>Max timeout (ms)
+              <input name="max_timeout_ms" type="number" min="0" value="1500">
+            </label>
+            <label>Latency factor
+              <input name="latency_factor" type="number" min="1" step="0.5" value="4">
+            </label>
+            <label class="check">
+              <input name="ble_enabled" type="checkbox" checked> BLE fallback
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">Save link</button>
+            <button type="button" id="link-form-reset" class="btn">Clear</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Health -->
+    <section id="view-health" class="view">
+      <header class="view-head">
+        <h1>Health</h1>
+        <button id="probe-btn" class="btn primary">Probe now</button>
+      </header>
+      <p class="muted">Auto-refreshes every 10 seconds.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Device</th><th>EWMA</th><th>Last</th><th>Samples</th><th>Failures</th><th>Status</th></tr>
+          </thead>
+          <tbody id="health-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" class="view">
+      <header class="view-head"><h1>Settings</h1></header>
+
+      <div class="panel">
+        <h2>MQTT</h2>
+        <form id="mqtt-form">
+          <div class="form-grid">
+            <label class="check"><input name="enable" type="checkbox"> Enable MQTT</label>
+            <label>Broker (host:port)
+              <input name="server" type="text" placeholder="192.168.1.2:1883">
+            </label>
+            <label>User
+              <input name="user" type="text" autocomplete="off">
+            </label>
+            <label>Password
+              <input name="pass" type="password" autocomplete="off">
+            </label>
+            <label>Topic prefix
+              <input name="topic_prefix" type="text">
+            </label>
+            <label class="check"><input name="rpc_ntf" type="checkbox"> RPC notifications</label>
+            <label class="check"><input name="status_ntf" type="checkbox"> Status notifications</label>
+            <label class="span2">Devices <span class="muted">(empty = all)</span>
+              <select name="devices" data-devices-multi multiple size="4"></select>
+            </label>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn primary">Apply MQTT</button></div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Bluetooth</h2>
+        <form id="ble-form">
+          <div class="form-grid">
+            <label class="check"><input name="enable" type="checkbox"> Enable BLE</label>
+            <label class="check"><input name="rpc" type="checkbox"> BLE RPC</label>
+            <label class="check"><input name="observer" type="checkbox"> Observer mode</label>
+            <label class="span2">Devices <span class="muted">(empty = all)</span>
+              <select name="devices" data-devices-multi multiple size="4"></select>
+            </label>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn primary">Apply Bluetooth</button></div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Range extender</h2>
+        <form id="extender-form">
+          <div class="form-grid">
+            <label>Extender device
+              <select name="device" data-devices required></select>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn primary" data-enable="true">Enable AP</button>
+            <button type="submit" class="btn" data-enable="false">Disable AP</button>
+          </div>
+        </form>
+        <h3>Bridge an edge device</h3>
+        <form id="join-form">
+          <div class="form-grid">
+            <label>Extender (AP)
+              <select name="extender" data-devices required></select>
+            </label>
+            <label>Edge device
+              <select name="edge" data-devices required></select>
+            </label>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn primary">Join</button></div>
+        </form>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Script preview modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="modal-title">Script preview</h2>
+      <button id="modal-close" class="btn">Close</button>
+    </div>
+    <pre id="modal-pre"></pre>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
