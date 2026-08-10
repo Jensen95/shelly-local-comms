@@ -12,6 +12,9 @@ Cloud, no Home Assistant required.
   BLU observer mode across many devices at once.
 - **Edge devices**: bridge devices at the fringe of WiFi coverage through a
   well-placed Shelly's built-in range-extender access point.
+- **Auto-discovery**: devices are found via mDNS — on demand and with a
+  background sweep (every 5 minutes by default, `-discover-interval` to
+  tune or disable) so new Shellys appear on their own.
 - **Two frontends**: a terminal UI (`shellyctl tui`) and an embedded web UI
   (`shellyctl serve`), both over the same core.
 

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Jensen95/shelly-local-comms/internal/app"
 	"github.com/Jensen95/shelly-local-comms/internal/manager"
@@ -33,10 +34,11 @@ func run(args []string) error {
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 		addr := fs.String("addr", ":8790", "listen address")
 		configPath := configFlag(fs)
+		discoverEvery := discoverFlag(fs)
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		m, err := openManager(*configPath)
+		m, err := openManager(*configPath, manager.WithDiscoveryInterval(*discoverEvery))
 		if err != nil {
 			return err
 		}
@@ -92,21 +94,27 @@ func configFlag(fs *flag.FlagSet) *string {
 	return fs.String("config", def, "path to config file")
 }
 
-func openManager(configPath string) (*manager.Manager, error) {
+func discoverFlag(fs *flag.FlagSet) *time.Duration {
+	return fs.Duration("discover-interval", manager.DefaultDiscoveryInterval,
+		"background mDNS auto-discovery interval (0 disables)")
+}
+
+func openManager(configPath string, opts ...manager.Option) (*manager.Manager, error) {
 	store, err := app.OpenStore(configPath)
 	if err != nil {
 		return nil, err
 	}
-	return manager.New(store), nil
+	return manager.New(store, opts...), nil
 }
 
 func withManager(args []string, fn func(context.Context, *manager.Manager) error) error {
 	fs := flag.NewFlagSet("shellyctl", flag.ContinueOnError)
 	configPath := configFlag(fs)
+	discoverEvery := discoverFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	m, err := openManager(*configPath)
+	m, err := openManager(*configPath, manager.WithDiscoveryInterval(*discoverEvery))
 	if err != nil {
 		return err
 	}

@@ -398,6 +398,9 @@ $("#probe-btn").addEventListener("click", async (ev) => {
 
 setInterval(() => {
   refreshHealth().catch(() => { /* transient network error; retry next tick */ });
+  // The server auto-discovers devices in the background; keep the device
+  // list in sync so new devices appear without a manual refresh.
+  refreshDevices().catch(() => { /* transient network error; retry next tick */ });
 }, 10000);
 
 /* ---------- settings ---------- */

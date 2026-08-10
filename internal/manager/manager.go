@@ -18,27 +18,79 @@ import (
 	"github.com/Jensen95/shelly-local-comms/internal/transport"
 )
 
+// DefaultDiscoveryInterval is how often Start re-scans the LAN for new
+// devices when auto-discovery is not configured explicitly.
+const DefaultDiscoveryInterval = 5 * time.Minute
+
+// autoDiscoverScanSeconds is the mDNS browse duration of one background
+// sweep.
+const autoDiscoverScanSeconds = 5
+
 // Manager is the concrete app.Manager implementation.
 type Manager struct {
-	store    *app.Store
-	prober   *transport.Prober
-	deployer *d2d.Deployer
+	store         *app.Store
+	prober        *transport.Prober
+	deployer      *d2d.Deployer
+	discoverEvery time.Duration
+	// discoverFn is shelly.Discover in production; tests inject a fake.
+	discoverFn func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error)
 }
 
 var _ app.Manager = (*Manager)(nil)
 
+// Option configures a Manager.
+type Option func(*Manager)
+
+// WithDiscoveryInterval sets how often Start runs a background mDNS sweep
+// for new devices. Zero or negative disables auto-discovery.
+func WithDiscoveryInterval(d time.Duration) Option {
+	return func(m *Manager) { m.discoverEvery = d }
+}
+
 // New builds a Manager around the given store.
-func New(store *app.Store) *Manager {
-	m := &Manager{store: store}
+func New(store *app.Store, opts ...Option) *Manager {
+	m := &Manager{
+		store:         store,
+		discoverEvery: DefaultDiscoveryInterval,
+		discoverFn:    shelly.Discover,
+	}
+	for _, o := range opts {
+		o(m)
+	}
 	m.prober = transport.NewProber(m.callerFor)
 	m.deployer = d2d.NewDeployer(m.callerFor)
 	m.prober.SetDevices(store.Config().Devices)
 	return m
 }
 
-// Start launches background work (the latency probe loop) until ctx ends.
+// Start launches background work until ctx ends: the latency probe loop
+// and, unless disabled, periodic device auto-discovery.
 func (m *Manager) Start(ctx context.Context) {
 	go m.prober.Run(ctx)
+	if m.discoverEvery > 0 {
+		go m.autoDiscover(ctx)
+	}
+}
+
+// autoDiscover sweeps the LAN immediately and then on every tick, merging
+// new devices into the registry. Scan errors are deliberately swallowed:
+// a failed sweep is retried on the next tick, and logging here would
+// corrupt the TUI's terminal output.
+func (m *Manager) autoDiscover(ctx context.Context) {
+	scan := func() {
+		_, _ = m.Discover(ctx, autoDiscoverScanSeconds)
+	}
+	scan()
+	t := time.NewTicker(m.discoverEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			scan()
+		}
+	}
 }
 
 // callerFor builds an RPC client for addr, injecting the stored password
@@ -72,7 +124,7 @@ func (m *Manager) Discover(ctx context.Context, timeoutSeconds int) ([]shelly.De
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 5
 	}
-	found, err := shelly.Discover(ctx, time.Duration(timeoutSeconds)*time.Second)
+	found, err := m.discoverFn(ctx, time.Duration(timeoutSeconds)*time.Second)
 	if err != nil {
 		return nil, err
 	}

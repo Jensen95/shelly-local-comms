@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jensen95/shelly-local-comms/internal/app"
+	"github.com/Jensen95/shelly-local-comms/internal/shelly"
 )
 
 // fakeDevice is an httptest-backed Shelly Gen2 RPC endpoint.
@@ -208,4 +210,63 @@ func TestSaveLinkStrategyValidation(t *testing.T) {
 	if _, err := m.SaveLink(bad); err == nil || !strings.Contains(err.Error(), "unknown link strategy") {
 		t.Fatalf("want unknown-strategy error, got %v", err)
 	}
+}
+
+func TestAutoDiscoverMergesDevices(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(10*time.Millisecond))
+	sweeps := make(chan struct{}, 16)
+	m.discoverFn = func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error) {
+		select {
+		case sweeps <- struct{}{}:
+		default:
+		}
+		return []shelly.Device{{
+			Addr:   "192.0.2.99",
+			Info:   shelly.DeviceInfo{ID: "shelly-auto", Gen: 2},
+			Source: "mdns",
+		}}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.autoDiscover(ctx)
+
+	for i := 0; i < 3; i++ {
+		select {
+		case <-sweeps:
+		case <-time.After(2 * time.Second):
+			t.Fatal("auto-discovery sweep did not run")
+		}
+	}
+
+	devs := m.Devices()
+	count := 0
+	for _, d := range devs {
+		if d.Key() == "shelly-auto" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("want exactly 1 auto-discovered device after repeated sweeps, got %d (devices: %+v)", count, devs)
+	}
+}
+
+func TestDiscoveryDisabled(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	m.discoverFn = func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error) {
+		t.Error("discovery must not run when the interval is 0")
+		return nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.Start(ctx)
+	time.Sleep(50 * time.Millisecond)
 }
