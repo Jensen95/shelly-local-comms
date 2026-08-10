@@ -29,7 +29,16 @@ func (d *Deployer) StartSurvey(ctx context.Context, dev shelly.Device) (int, err
 	if err != nil {
 		return 0, err
 	}
-	return d.install(ctx, dev.Addr, scripts.SurveyScriptName, code, false)
+	id, err := d.install(ctx, dev.Addr, scripts.SurveyScriptName, code, false)
+	if err != nil {
+		// Don't leak the slot (devices have ~10) or a possibly-started
+		// scanner when the install failed partway through.
+		if id != 0 {
+			_ = d.Undeploy(ctx, dev, id)
+		}
+		return 0, err
+	}
+	return id, nil
 }
 
 // CollectSurvey reads the accumulated scan results from the survey script

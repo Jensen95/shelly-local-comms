@@ -666,10 +666,17 @@ func (m *Manager) wifiReadings(ctx context.Context, devices []shelly.Device) (ma
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			st, err := settings.GetWiFiStatus(ctx, m.callerFor(d.Addr))
-			if err != nil || st.RSSI >= 0 {
+			if err != nil {
 				return
 			}
+			// The device answered — that counts as a reading even when it
+			// has no WiFi uplink (an all-wired fleet is "no suggestions",
+			// not an error). rssi>=0 means Ethernet/AP-only: exclude it
+			// from the signal map, since 0 would read as strongest.
 			okCount.Add(1)
+			if st.RSSI >= 0 {
+				return
+			}
 			readings[i] = reading{key: d.Key(), rssi: st.RSSI}
 		}()
 	}
@@ -750,61 +757,98 @@ type surveyNeighbor struct {
 	bleRSSI int
 }
 
-// matchSurvey pairs raw scan results with known devices — by advertised
-// local name containing the device id, or by the BLE MAC being the WiFi
-// MAC or an adjacent address (Shelly BLE MACs are derived from the WiFi
-// MAC). Result is sorted loudest first.
+// matchSurvey attributes each scan entry to at most one known device and
+// returns the per-device best BLE RSSI, sorted loudest first. Match
+// precedence per advertisement: exact stored BLE MAC, then advertised
+// local name containing the device id, then the single nearest
+// WiFi-MAC-adjacent device (Shelly BLE MACs are derived from the WiFi
+// MAC; an ambiguous adjacency tie matches nothing rather than crediting
+// the wrong device with a proximity reading).
 func matchSurvey(seen map[string]d2d.SurveyEntry, devices []shelly.Device, exclude string) []surveyNeighbor {
-	var out []surveyNeighbor
+	best := map[string]int{}
+	for addr, e := range seen {
+		key := matchDevice(addr, e, devices, exclude)
+		if key == "" {
+			continue
+		}
+		if r, ok := best[key]; !ok || e.RSSI > r {
+			best[key] = e.RSSI
+		}
+	}
+	out := make([]surveyNeighbor, 0, len(best))
+	for k, r := range best {
+		out = append(out, surveyNeighbor{key: k, bleRSSI: r})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].bleRSSI != out[j].bleRSSI {
+			return out[i].bleRSSI > out[j].bleRSSI
+		}
+		return out[i].key < out[j].key
+	})
+	return out
+}
+
+// matchDevice resolves one advertisement to the device it belongs to, or
+// "" when unknown/ambiguous.
+func matchDevice(addr string, e d2d.SurveyEntry, devices []shelly.Device, exclude string) string {
+	naddr := normalizeMAC(addr)
+	for _, d := range devices {
+		if d.Key() == exclude || d.BLEMAC == "" {
+			continue
+		}
+		if normalizeMAC(d.BLEMAC) == naddr {
+			return d.Key()
+		}
+	}
+	if e.Name != "" {
+		name := strings.ToLower(e.Name)
+		for _, d := range devices {
+			if d.Key() == exclude {
+				continue
+			}
+			if id := strings.ToLower(d.Info.ID); id != "" && strings.Contains(name, id) {
+				return d.Key()
+			}
+		}
+	}
+	bestKey, bestDiff, tie := "", 3, false
 	for _, d := range devices {
 		if d.Key() == exclude {
 			continue
 		}
-		best, found := 0, false
-		for addr, e := range seen {
-			if !surveyEntryMatches(addr, e, d) {
-				continue
-			}
-			if !found || e.RSSI > best {
-				best, found = e.RSSI, true
-			}
+		diff, ok := macDiff(naddr, normalizeMAC(d.Info.MAC))
+		if !ok || diff > 2 {
+			continue
 		}
-		if found {
-			out = append(out, surveyNeighbor{key: d.Key(), bleRSSI: best})
+		switch {
+		case diff < bestDiff:
+			bestKey, bestDiff, tie = d.Key(), diff, false
+		case diff == bestDiff:
+			tie = true
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].bleRSSI > out[j].bleRSSI })
-	return out
+	if tie {
+		return ""
+	}
+	return bestKey
 }
 
-func surveyEntryMatches(addr string, e d2d.SurveyEntry, d shelly.Device) bool {
-	if id := strings.ToLower(d.Info.ID); id != "" && e.Name != "" &&
-		strings.Contains(strings.ToLower(e.Name), id) {
-		return true
-	}
-	return macAdjacent(addr, d.Info.MAC)
-}
-
-// macAdjacent reports whether two MAC representations are the same
-// address or differ only in the last byte by at most 2.
-func macAdjacent(a, b string) bool {
-	na, nb := normalizeMAC(a), normalizeMAC(b)
-	if len(na) != 12 || len(nb) != 12 {
-		return false
-	}
-	if na[:10] != nb[:10] {
-		return false
+// macDiff returns the absolute difference of the last byte of two
+// normalized MACs sharing the same first five bytes.
+func macDiff(na, nb string) (int, bool) {
+	if len(na) != 12 || len(nb) != 12 || na[:10] != nb[:10] {
+		return 0, false
 	}
 	la, err1 := strconv.ParseUint(na[10:], 16, 8)
 	lb, err2 := strconv.ParseUint(nb[10:], 16, 8)
 	if err1 != nil || err2 != nil {
-		return false
+		return 0, false
 	}
 	diff := int(la) - int(lb)
 	if diff < 0 {
 		diff = -diff
 	}
-	return diff <= 2
+	return diff, true
 }
 
 // normalizeMAC keeps the first 12 hex digits, lowercased (scanner

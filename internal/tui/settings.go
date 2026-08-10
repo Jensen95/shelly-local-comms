@@ -393,7 +393,7 @@ func formatSuggestions(sugg []app.ExtenderSuggestion) string {
 			parts[i] = fmt.Sprintf("%s (wifi %d dBm) <- %s (closest by BLE: heard at %d dBm; wifi %d dBm)",
 				sg.Edge, sg.EdgeRSSI, sg.Extender, sg.BLERSSI, sg.ExtenderRSSI)
 		} else {
-			parts[i] = fmt.Sprintf("%s (wifi %d dBm) <- %s (wifi %d dBm; fallback: strongest router signal, proximity unknown — BLE survey unavailable)",
+			parts[i] = fmt.Sprintf("%s (wifi %d dBm) <- %s (wifi %d dBm; fallback: strongest router signal, proximity unknown)",
 				sg.Edge, sg.EdgeRSSI, sg.Extender, sg.ExtenderRSSI)
 		}
 	}

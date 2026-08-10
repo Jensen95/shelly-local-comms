@@ -52,7 +52,11 @@ if (typeof BLE === "undefined" || !BLE.Scanner || typeof BLE.Scanner.Subscribe !
     e.count++;
     if (res.local_name && res.local_name.length > 0) e.name = res.local_name;
   });
-  BLE.Scanner.Start({ duration_ms: {{.DurationMs}}, active: true });
-  print("shellyctl-survey: scanning BLE for {{.DurationMs}}ms");
+  let h = BLE.Scanner.Start({ duration_ms: {{.DurationMs}}, active: true });
+  if (h === null) {
+    seen["__error"] = { rssi: 0, count: 0, name: "BLE scanner failed to start (radio busy or scan already running)" };
+  } else {
+    print("shellyctl-survey: scanning BLE for {{.DurationMs}}ms");
+  }
 }
 `

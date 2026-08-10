@@ -49,9 +49,12 @@ type Manager interface {
 	// edge device at that AP.
 	EnableRangeExtender(ctx context.Context, key string, enable bool) error
 	JoinExtender(ctx context.Context, edgeKey, extenderKey string) error
-	// SuggestExtenders reads every device's WiFi signal strength and
-	// pairs each weak-signal device with the strongest-signal device as
-	// a range-extender candidate.
+	// SuggestExtenders finds weak-WiFi devices and suggests an extender
+	// for each. It deploys a temporary BLE scan script to every weak
+	// device (side effect; roughly 15 seconds wall time, surveys run in
+	// parallel) and pairs it with the neighbor it hears loudest that has
+	// a healthy uplink; when the survey cannot run it falls back to the
+	// strongest-router-signal device, labeled via Method.
 	SuggestExtenders(ctx context.Context) ([]ExtenderSuggestion, error)
 
 	// --- Health / latency ---

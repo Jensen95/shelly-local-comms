@@ -491,7 +491,7 @@ $("#suggest-btn").addEventListener("click", async () => {
   const btn = $("#suggest-btn");
   const box = $("#suggestions");
   btn.disabled = true;
-  box.textContent = "Measuring: weak-signal devices run a short BLE scan to find their closest neighbor (takes ~15s per weak device)…";
+  box.textContent = "Measuring: weak-signal devices run a short BLE scan to find their closest neighbor (about 15 seconds; scans run in parallel)…";
   try {
     const sugg = await api("/api/settings/extender/suggestions");
     box.replaceChildren();

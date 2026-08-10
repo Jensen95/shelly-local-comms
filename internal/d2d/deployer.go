@@ -118,7 +118,7 @@ func (d *Deployer) install(ctx context.Context, addr, name, code string, autosta
 	if err := c.Call(ctx, "Script.Stop", map[string]any{"id": id}, nil); err != nil {
 		var rpcErr *shelly.RPCError
 		if !errors.As(err, &rpcErr) {
-			return 0, fmt.Errorf("d2d: stop script %d on %s: %w", id, addr, err)
+			return id, fmt.Errorf("d2d: stop script %d on %s: %w", id, addr, err)
 		}
 	}
 
@@ -126,26 +126,26 @@ func (d *Deployer) install(ctx context.Context, addr, name, code string, autosta
 		end := chunkEnd(code, i)
 		params := map[string]any{"id": id, "code": code[i:end], "append": i > 0}
 		if err := c.Call(ctx, "Script.PutCode", params, nil); err != nil {
-			return 0, fmt.Errorf("d2d: upload script %d chunk at %d on %s: %w", id, i, addr, err)
+			return id, fmt.Errorf("d2d: upload script %d chunk at %d on %s: %w", id, i, addr, err)
 		}
 		i = end
 	}
 
 	if err := c.Call(ctx, "Script.SetConfig", map[string]any{"id": id, "config": map[string]any{"enable": autostart}}, nil); err != nil {
-		return 0, fmt.Errorf("d2d: configure script %d on %s: %w", id, addr, err)
+		return id, fmt.Errorf("d2d: configure script %d on %s: %w", id, addr, err)
 	}
 	if err := c.Call(ctx, "Script.Start", map[string]any{"id": id}, nil); err != nil {
-		return 0, fmt.Errorf("d2d: start script %d on %s: %w", id, addr, err)
+		return id, fmt.Errorf("d2d: start script %d on %s: %w", id, addr, err)
 	}
 
 	var status struct {
 		Running bool `json:"running"`
 	}
 	if err := c.Call(ctx, "Script.GetStatus", map[string]any{"id": id}, &status); err != nil {
-		return 0, fmt.Errorf("d2d: get status of script %d on %s: %w", id, addr, err)
+		return id, fmt.Errorf("d2d: get status of script %d on %s: %w", id, addr, err)
 	}
 	if !status.Running {
-		return 0, fmt.Errorf("d2d: script %d on %s did not start (running=false); check the device's script console for errors", id, addr)
+		return id, fmt.Errorf("d2d: script %d on %s did not start (running=false); check the device's script console for errors", id, addr)
 	}
 	return id, nil
 }

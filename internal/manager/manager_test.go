@@ -603,3 +603,44 @@ func TestMatchSurveyByMACAdjacency(t *testing.T) {
 		t.Fatalf("MAC three apart matched: %+v", got)
 	}
 }
+
+func TestMatchSurveyAmbiguousAdjacencyMatchesNothing(t *testing.T) {
+	devices := []shelly.Device{
+		{Addr: "192.0.2.5", Info: shelly.DeviceInfo{ID: "shelly-a", MAC: "A8032AB12340"}},
+		{Addr: "192.0.2.6", Info: shelly.DeviceInfo{ID: "shelly-b", MAC: "A8032AB12344"}},
+	}
+	// ...42 is exactly 2 away from both devices: crediting either would be
+	// a guess presented as a proximity measurement.
+	seen := map[string]d2d.SurveyEntry{"a8:03:2a:b1:23:42": {RSSI: -50, Count: 3}}
+	if got := matchSurvey(seen, devices, "other"); len(got) != 0 {
+		t.Fatalf("ambiguous adjacency matched: %+v", got)
+	}
+}
+
+func TestMatchSurveyExactBLEMACWins(t *testing.T) {
+	devices := []shelly.Device{
+		{Addr: "192.0.2.5", BLEMAC: "a8:03:2a:b1:23:42", Info: shelly.DeviceInfo{ID: "shelly-a", MAC: "A8032AB12340"}},
+		{Addr: "192.0.2.6", Info: shelly.DeviceInfo{ID: "shelly-b", MAC: "A8032AB12344"}},
+	}
+	// Same ambiguous address as above, but shelly-a's stored BLE MAC
+	// resolves it deterministically.
+	seen := map[string]d2d.SurveyEntry{"a8:03:2a:b1:23:42": {RSSI: -50, Count: 3}}
+	got := matchSurvey(seen, devices, "other")
+	if len(got) != 1 || got[0].key != "shelly-a" {
+		t.Fatalf("matchSurvey = %+v, want exact BLEMAC match on shelly-a", got)
+	}
+}
+
+func TestSuggestExtendersAllWiredIsNoSuggestionsNotError(t *testing.T) {
+	m := newSuggestionManager(t)
+	addFakeDevice(t, m, "shelly-eth1", 0)
+	addFakeDevice(t, m, "shelly-eth2", 0)
+
+	sugg, err := m.SuggestExtenders(context.Background())
+	if err != nil {
+		t.Fatalf("all-wired fleet must not be an error, got %v", err)
+	}
+	if len(sugg) != 0 {
+		t.Fatalf("suggestions = %+v, want none", sugg)
+	}
+}
