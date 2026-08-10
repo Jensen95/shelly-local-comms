@@ -82,13 +82,18 @@ func (d *Deployer) Deploy(ctx context.Context, source shelly.Device, l app.Link,
 	if err != nil {
 		return 0, err
 	}
+	return d.install(ctx, source.Addr, ScriptName(l.ID), code, true)
+}
 
-	c := d.callerFor(source.Addr)
-	name := ScriptName(l.ID)
+// install uploads code into the script slot named name on the device at
+// addr (reusing or creating the slot), sets its boot-autostart flag,
+// starts it and verifies it is running. It returns the script id.
+func (d *Deployer) install(ctx context.Context, addr, name, code string, autostart bool) (int, error) {
+	c := d.callerFor(addr)
 
 	var list scriptListResult
 	if err := c.Call(ctx, "Script.List", nil, &list); err != nil {
-		return 0, fmt.Errorf("d2d: list scripts on %s: %w", source.Addr, err)
+		return 0, fmt.Errorf("d2d: list scripts on %s: %w", addr, err)
 	}
 	id := 0
 	for _, s := range list.Scripts {
@@ -102,7 +107,7 @@ func (d *Deployer) Deploy(ctx context.Context, source shelly.Device, l app.Link,
 			ID int `json:"id"`
 		}
 		if err := c.Call(ctx, "Script.Create", map[string]any{"name": name}, &created); err != nil {
-			return 0, fmt.Errorf("d2d: create script %q on %s: %w", name, source.Addr, err)
+			return 0, fmt.Errorf("d2d: create script %q on %s: %w", name, addr, err)
 		}
 		id = created.ID
 	}
@@ -113,7 +118,7 @@ func (d *Deployer) Deploy(ctx context.Context, source shelly.Device, l app.Link,
 	if err := c.Call(ctx, "Script.Stop", map[string]any{"id": id}, nil); err != nil {
 		var rpcErr *shelly.RPCError
 		if !errors.As(err, &rpcErr) {
-			return 0, fmt.Errorf("d2d: stop script %d on %s: %w", id, source.Addr, err)
+			return 0, fmt.Errorf("d2d: stop script %d on %s: %w", id, addr, err)
 		}
 	}
 
@@ -121,26 +126,26 @@ func (d *Deployer) Deploy(ctx context.Context, source shelly.Device, l app.Link,
 		end := chunkEnd(code, i)
 		params := map[string]any{"id": id, "code": code[i:end], "append": i > 0}
 		if err := c.Call(ctx, "Script.PutCode", params, nil); err != nil {
-			return 0, fmt.Errorf("d2d: upload script %d chunk at %d on %s: %w", id, i, source.Addr, err)
+			return 0, fmt.Errorf("d2d: upload script %d chunk at %d on %s: %w", id, i, addr, err)
 		}
 		i = end
 	}
 
-	if err := c.Call(ctx, "Script.SetConfig", map[string]any{"id": id, "config": map[string]any{"enable": true}}, nil); err != nil {
-		return 0, fmt.Errorf("d2d: enable autostart for script %d on %s: %w", id, source.Addr, err)
+	if err := c.Call(ctx, "Script.SetConfig", map[string]any{"id": id, "config": map[string]any{"enable": autostart}}, nil); err != nil {
+		return 0, fmt.Errorf("d2d: configure script %d on %s: %w", id, addr, err)
 	}
 	if err := c.Call(ctx, "Script.Start", map[string]any{"id": id}, nil); err != nil {
-		return 0, fmt.Errorf("d2d: start script %d on %s: %w", id, source.Addr, err)
+		return 0, fmt.Errorf("d2d: start script %d on %s: %w", id, addr, err)
 	}
 
 	var status struct {
 		Running bool `json:"running"`
 	}
 	if err := c.Call(ctx, "Script.GetStatus", map[string]any{"id": id}, &status); err != nil {
-		return 0, fmt.Errorf("d2d: get status of script %d on %s: %w", id, source.Addr, err)
+		return 0, fmt.Errorf("d2d: get status of script %d on %s: %w", id, addr, err)
 	}
 	if !status.Running {
-		return 0, fmt.Errorf("d2d: script %d on %s did not start (running=false); check the device's script console for errors", id, source.Addr)
+		return 0, fmt.Errorf("d2d: script %d on %s did not start (running=false); check the device's script console for errors", id, addr)
 	}
 	return id, nil
 }

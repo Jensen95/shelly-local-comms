@@ -491,7 +491,7 @@ $("#suggest-btn").addEventListener("click", async () => {
   const btn = $("#suggest-btn");
   const box = $("#suggestions");
   btn.disabled = true;
-  box.textContent = "Reading WiFi signal strength from all devices…";
+  box.textContent = "Measuring: weak-signal devices run a short BLE scan to find their closest neighbor (takes ~15s per weak device)…";
   try {
     const sugg = await api("/api/settings/extender/suggestions");
     box.replaceChildren();
@@ -499,9 +499,11 @@ $("#suggest-btn").addEventListener("click", async () => {
       box.textContent = "No suggestions — every reachable device has decent WiFi signal.";
       return;
     }
-    box.append(el("p", {},
-      "RSSI measures signal to the router, not distance between devices — treat these as starting points. Click one to prefill the form:"));
+    box.append(el("p", {}, "Click a suggestion to prefill the form:"));
     for (const s of sugg) {
+      const label = s.method === "ble-proximity"
+        ? `${s.edge} (wifi ${s.edge_rssi} dBm) ← ${s.extender} (closest by BLE: ${s.ble_rssi} dBm, wifi ${s.extender_rssi} dBm)`
+        : `${s.edge} (wifi ${s.edge_rssi} dBm) ← ${s.extender} (wifi ${s.extender_rssi} dBm — fallback: strongest router signal, proximity unknown)`;
       box.append(el("button", {
         class: "btn small",
         onclick: () => {
@@ -510,7 +512,7 @@ $("#suggest-btn").addEventListener("click", async () => {
           form.elements.extender.value = s.extender;
           toast(`Prefilled: ${s.edge} via ${s.extender}`);
         },
-      }, `${s.edge} (${s.edge_rssi} dBm) ← ${s.extender} (${s.extender_rssi} dBm)`));
+      }, label));
     }
   } catch (err) {
     box.textContent = "";

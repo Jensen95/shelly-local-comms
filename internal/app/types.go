@@ -107,15 +107,31 @@ type BLESettings struct {
 	Observer bool `json:"observer"`
 }
 
+// Methods by which an extender suggestion was derived.
+const (
+	// SuggestBLEProximity: the weak device itself scanned BLE
+	// advertisements and the suggested extender is the neighbor it hears
+	// loudest — a direct proximity measurement.
+	SuggestBLEProximity = "ble-proximity"
+	// SuggestWiFiFallback: the BLE survey was unavailable (Bluetooth off,
+	// old firmware), so the suggestion falls back to the device with the
+	// strongest router signal — which says nothing about how close it is
+	// to the weak device.
+	SuggestWiFiFallback = "wifi-fallback"
+)
+
 // ExtenderSuggestion pairs a device with weak WiFi signal with a
 // well-placed device that could bridge it via the range-extender AP.
-// RSSI is signal strength to the router, not distance between the two
-// devices — treat the suggestion as a starting point, not ground truth.
 type ExtenderSuggestion struct {
 	Edge         string `json:"edge"`
 	EdgeRSSI     int    `json:"edge_rssi"`
 	Extender     string `json:"extender"`
 	ExtenderRSSI int    `json:"extender_rssi"`
+	// BLERSSI is how loudly the edge device heard the suggested
+	// extender's BLE advertisements (SuggestBLEProximity only).
+	BLERSSI int `json:"ble_rssi,omitempty"`
+	// Method is SuggestBLEProximity or SuggestWiFiFallback.
+	Method string `json:"method"`
 }
 
 // LatencyStats is the manager's health view of one device on the LAN.

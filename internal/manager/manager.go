@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/Jensen95/shelly-local-comms/internal/app"
 	"github.com/Jensen95/shelly-local-comms/internal/d2d"
 	"github.com/Jensen95/shelly-local-comms/internal/mqttdisc"
+	"github.com/Jensen95/shelly-local-comms/internal/scripts"
 	"github.com/Jensen95/shelly-local-comms/internal/settings"
 	"github.com/Jensen95/shelly-local-comms/internal/shelly"
 	"github.com/Jensen95/shelly-local-comms/internal/transport"
@@ -41,6 +44,9 @@ type Manager struct {
 	discoverEvery time.Duration
 	// discoverFn is shelly.Discover in production; tests inject a fake.
 	discoverFn func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error)
+	// surveyWait is how long to let a deployed BLE survey scan before
+	// collecting results; tests shrink it.
+	surveyWait time.Duration
 	// MQTT announce-discovery. mqttMu guards the service pointer and
 	// cancel; runCtx (set by Start) parents the service's lifetime so
 	// ApplyMQTT can (re)start discovery in the running process.
@@ -67,6 +73,7 @@ func New(store *app.Store, opts ...Option) *Manager {
 		store:         store,
 		discoverEvery: DefaultDiscoveryInterval,
 		discoverFn:    shelly.Discover,
+		surveyWait:    time.Duration(scripts.SurveyDurationMs)*time.Millisecond + time.Second,
 	}
 	for _, o := range opts {
 		o(m)
@@ -586,20 +593,64 @@ func (m *Manager) JoinExtender(ctx context.Context, edgeKey, extenderKey string)
 }
 
 // RSSI thresholds (dBm) for extender suggestions: a device at or below
-// weakRSSI needs help; a candidate must be at least minCandidateRSSI and
-// meaningfully stronger than the edge device to be worth suggesting.
+// weakRSSI needs help; a WiFi-fallback candidate must be at least
+// minCandidateRSSI and meaningfully stronger than the edge device.
 const (
 	weakRSSI         = -70
 	minCandidateRSSI = -65
 	minRSSIGain      = 10
 )
 
-// SuggestExtenders reads every device's WiFi RSSI concurrently and pairs
-// each weak-signal device with the strongest-signal device. RSSI measures
-// signal to the router, not proximity between the two devices, so this is
-// a heuristic starting point — the UIs say as much.
+// SuggestExtenders finds devices with weak WiFi and suggests the best
+// extender for each. Primary method: the weak device itself runs a short
+// BLE scan (a temporary script deployed for the duration) and the
+// neighbor it hears loudest — that also has a healthy WiFi uplink — is
+// suggested: a direct proximity measurement. When the survey cannot run
+// (Bluetooth off, old firmware), it falls back to the device with the
+// strongest router signal, labeled as such.
 func (m *Manager) SuggestExtenders(ctx context.Context) ([]app.ExtenderSuggestion, error) {
 	devices := m.store.Config().Devices
+	wifi, err := m.wifiReadings(ctx, devices)
+	if err != nil {
+		return nil, err
+	}
+
+	var weak []shelly.Device
+	for _, d := range devices {
+		if r, ok := wifi[d.Key()]; ok && r <= weakRSSI {
+			weak = append(weak, d)
+		}
+	}
+	if len(weak) == 0 {
+		return nil, nil
+	}
+
+	out := make([]app.ExtenderSuggestion, len(weak))
+	var wg sync.WaitGroup
+	for i, w := range weak {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = m.suggestFor(ctx, w, wifi, devices)
+		}()
+	}
+	wg.Wait()
+
+	kept := out[:0]
+	for _, s := range out {
+		if s.Extender != "" {
+			kept = append(kept, s)
+		}
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].EdgeRSSI < kept[j].EdgeRSSI })
+	return kept, nil
+}
+
+// wifiReadings returns each reachable device's station RSSI by key.
+// Devices without a WiFi uplink (Ethernet/AP-only report no rssi, which
+// decodes to 0) are excluded — 0 would otherwise read as the strongest
+// possible signal.
+func (m *Manager) wifiReadings(ctx context.Context, devices []shelly.Device) (map[string]int, error) {
 	type reading struct {
 		key  string
 		rssi int
@@ -615,54 +666,160 @@ func (m *Manager) SuggestExtenders(ctx context.Context) ([]app.ExtenderSuggestio
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			st, err := settings.GetWiFiStatus(ctx, m.callerFor(d.Addr))
-			if err != nil {
-				readings[i] = reading{key: "", rssi: 0} // unreachable: skip
+			if err != nil || st.RSSI >= 0 {
 				return
 			}
 			okCount.Add(1)
-			// A device whose WiFi station is down (Ethernet or AP-only)
-			// reports no rssi, which decodes to 0 — the "strongest"
-			// possible value. Only real dBm readings participate.
-			if st.RSSI >= 0 {
-				readings[i] = reading{key: "", rssi: 0}
-				return
-			}
 			readings[i] = reading{key: d.Key(), rssi: st.RSSI}
 		}()
 	}
 	wg.Wait()
 	if okCount.Load() == 0 && len(devices) > 0 {
-		return nil, errors.New("no device answered WiFi.GetStatus — cannot measure signal strength")
+		return nil, errors.New("no device reported a WiFi signal reading — cannot measure signal strength")
+	}
+	wifi := make(map[string]int, len(readings))
+	for _, r := range readings {
+		if r.key != "" {
+			wifi[r.key] = r.rssi
+		}
+	}
+	return wifi, nil
+}
+
+// suggestFor produces the suggestion for one weak device; Extender is
+// empty when no usable candidate exists.
+func (m *Manager) suggestFor(ctx context.Context, w shelly.Device, wifi map[string]int, devices []shelly.Device) app.ExtenderSuggestion {
+	edgeRSSI := wifi[w.Key()]
+
+	if seen, err := m.bleSurvey(ctx, w); err == nil {
+		for _, n := range matchSurvey(seen, devices, w.Key()) {
+			r, ok := wifi[n.key]
+			// The extender's own uplink must not be weak, or it cannot
+			// bridge anything.
+			if !ok || r <= weakRSSI {
+				continue
+			}
+			return app.ExtenderSuggestion{
+				Edge: w.Key(), EdgeRSSI: edgeRSSI,
+				Extender: n.key, ExtenderRSSI: r,
+				BLERSSI: n.bleRSSI, Method: app.SuggestBLEProximity,
+			}
+		}
 	}
 
-	best := reading{}
-	for _, r := range readings {
-		if r.key == "" {
+	// Fallback: strongest router signal. Distance-blind, so it is held to
+	// stricter thresholds and labeled for the UIs.
+	bestKey, bestRSSI := "", 0
+	for _, d := range devices {
+		if d.Key() == w.Key() {
 			continue
 		}
-		if best.key == "" || r.rssi > best.rssi {
-			best = r
+		if r, ok := wifi[d.Key()]; ok && (bestKey == "" || r > bestRSSI) {
+			bestKey, bestRSSI = d.Key(), r
 		}
 	}
+	if bestKey == "" || bestRSSI < minCandidateRSSI || bestRSSI-edgeRSSI < minRSSIGain {
+		return app.ExtenderSuggestion{}
+	}
+	return app.ExtenderSuggestion{
+		Edge: w.Key(), EdgeRSSI: edgeRSSI,
+		Extender: bestKey, ExtenderRSSI: bestRSSI,
+		Method: app.SuggestWiFiFallback,
+	}
+}
 
-	var out []app.ExtenderSuggestion
-	for _, r := range readings {
-		if r.key == "" || r.rssi > weakRSSI {
-			continue
-		}
-		if best.key == "" || best.key == r.key {
-			continue
-		}
-		if best.rssi < minCandidateRSSI || best.rssi-r.rssi < minRSSIGain {
-			continue
-		}
-		out = append(out, app.ExtenderSuggestion{
-			Edge: r.key, EdgeRSSI: r.rssi,
-			Extender: best.key, ExtenderRSSI: best.rssi,
-		})
+// bleSurvey deploys the temporary scan script to dev, waits out the scan
+// window and collects the per-neighbor BLE RSSI map.
+func (m *Manager) bleSurvey(ctx context.Context, dev shelly.Device) (map[string]d2d.SurveyEntry, error) {
+	id, err := m.deployer.StartSurvey(ctx, dev)
+	if err != nil {
+		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].EdgeRSSI < out[j].EdgeRSSI })
-	return out, nil
+	select {
+	case <-ctx.Done():
+		_, _ = m.deployer.CollectSurvey(context.WithoutCancel(ctx), dev, id)
+		return nil, ctx.Err()
+	case <-time.After(m.surveyWait):
+	}
+	return m.deployer.CollectSurvey(ctx, dev, id)
+}
+
+// surveyNeighbor is a survey hit matched to a known device.
+type surveyNeighbor struct {
+	key     string
+	bleRSSI int
+}
+
+// matchSurvey pairs raw scan results with known devices — by advertised
+// local name containing the device id, or by the BLE MAC being the WiFi
+// MAC or an adjacent address (Shelly BLE MACs are derived from the WiFi
+// MAC). Result is sorted loudest first.
+func matchSurvey(seen map[string]d2d.SurveyEntry, devices []shelly.Device, exclude string) []surveyNeighbor {
+	var out []surveyNeighbor
+	for _, d := range devices {
+		if d.Key() == exclude {
+			continue
+		}
+		best, found := 0, false
+		for addr, e := range seen {
+			if !surveyEntryMatches(addr, e, d) {
+				continue
+			}
+			if !found || e.RSSI > best {
+				best, found = e.RSSI, true
+			}
+		}
+		if found {
+			out = append(out, surveyNeighbor{key: d.Key(), bleRSSI: best})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].bleRSSI > out[j].bleRSSI })
+	return out
+}
+
+func surveyEntryMatches(addr string, e d2d.SurveyEntry, d shelly.Device) bool {
+	if id := strings.ToLower(d.Info.ID); id != "" && e.Name != "" &&
+		strings.Contains(strings.ToLower(e.Name), id) {
+		return true
+	}
+	return macAdjacent(addr, d.Info.MAC)
+}
+
+// macAdjacent reports whether two MAC representations are the same
+// address or differ only in the last byte by at most 2.
+func macAdjacent(a, b string) bool {
+	na, nb := normalizeMAC(a), normalizeMAC(b)
+	if len(na) != 12 || len(nb) != 12 {
+		return false
+	}
+	if na[:10] != nb[:10] {
+		return false
+	}
+	la, err1 := strconv.ParseUint(na[10:], 16, 8)
+	lb, err2 := strconv.ParseUint(nb[10:], 16, 8)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	diff := int(la) - int(lb)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= 2
+}
+
+// normalizeMAC keeps the first 12 hex digits, lowercased (scanner
+// addresses may carry separators and a trailing address-type field).
+func normalizeMAC(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			b.WriteRune(r)
+			if b.Len() == 12 {
+				break
+			}
+		}
+	}
+	return b.String()
 }
 
 // --- Health ---

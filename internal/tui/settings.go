@@ -389,9 +389,15 @@ func formatSuggestions(sugg []app.ExtenderSuggestion) string {
 	}
 	parts := make([]string, len(sugg))
 	for i, sg := range sugg {
-		parts[i] = fmt.Sprintf("%s (%d dBm) <- extender %s (%d dBm)", sg.Edge, sg.EdgeRSSI, sg.Extender, sg.ExtenderRSSI)
+		if sg.Method == app.SuggestBLEProximity {
+			parts[i] = fmt.Sprintf("%s (wifi %d dBm) <- %s (closest by BLE: heard at %d dBm; wifi %d dBm)",
+				sg.Edge, sg.EdgeRSSI, sg.Extender, sg.BLERSSI, sg.ExtenderRSSI)
+		} else {
+			parts[i] = fmt.Sprintf("%s (wifi %d dBm) <- %s (wifi %d dBm; fallback: strongest router signal, proximity unknown — BLE survey unavailable)",
+				sg.Edge, sg.EdgeRSSI, sg.Extender, sg.ExtenderRSSI)
+		}
 	}
-	return "suggestions (RSSI is signal to the router, not device proximity): " + strings.Join(parts, " · ")
+	return "suggestions: " + strings.Join(parts, " · ")
 }
 
 func (s settingsModel) updateDevicePick(msg tea.KeyMsg) (settingsModel, tea.Cmd) {

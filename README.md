@@ -19,9 +19,11 @@ Cloud, no Home Assistant required.
   devices on the broker to announce themselves (their announce includes
   their IP), which also finds devices on subnets mDNS cannot cross. Every
   manual Discover action re-sweeps both channels.
-- **Extender suggestions**: reads each device's WiFi signal strength
-  (RSSI) and suggests which well-placed device should bridge a
-  weak-signal one via the range-extender AP.
+- **Extender suggestions**: finds devices with weak WiFi, then has each
+  one run a short on-device **BLE proximity scan** to identify its
+  physically closest neighbor with a healthy uplink — that neighbor is
+  suggested as the range-extender. Falls back to strongest-router-signal
+  (clearly labeled) when the BLE survey can't run.
 - **Two frontends**: a terminal UI (`shellyctl tui`) and an embedded web UI
   (`shellyctl serve`), both over the same core.
 

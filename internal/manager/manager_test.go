@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Jensen95/shelly-local-comms/internal/app"
+	"github.com/Jensen95/shelly-local-comms/internal/d2d"
 	"github.com/Jensen95/shelly-local-comms/internal/shelly"
 )
 
@@ -23,6 +24,9 @@ type fakeDevice struct {
 	running  bool
 	rssi     int
 	failMQTT bool
+	// surveyJSON is what Script.Eval("getResults()") returns; "{}" when
+	// unset (survey ran, saw nothing).
+	surveyJSON string
 }
 
 func (f *fakeDevice) handler() http.HandlerFunc {
@@ -64,6 +68,12 @@ func (f *fakeDevice) handler() http.HandlerFunc {
 			}}
 		case "WiFi.GetStatus":
 			result = map[string]any{"sta_ip": "192.0.2.1", "status": "got ip", "ssid": "home", "rssi": f.rssi}
+		case "Script.Eval":
+			sj := f.surveyJSON
+			if sj == "" {
+				sj = "{}"
+			}
+			result = map[string]any{"result": sj}
 		case "MQTT.SetConfig":
 			if f.failMQTT {
 				_ = json.NewEncoder(w).Encode(map[string]any{
@@ -353,7 +363,7 @@ func TestDiscoverClampsTimeout(t *testing.T) {
 	}
 }
 
-func addFakeDevice(t *testing.T, m *Manager, id string, rssi int) {
+func addFakeDevice(t *testing.T, m *Manager, id string, rssi int) *fakeDevice {
 	t.Helper()
 	f := &fakeDevice{t: t, id: id, rssi: rssi}
 	srv := httptest.NewServer(f.handler())
@@ -361,14 +371,22 @@ func addFakeDevice(t *testing.T, m *Manager, id string, rssi int) {
 	if _, err := m.AddDevice(context.Background(), strings.TrimPrefix(srv.URL, "http://"), ""); err != nil {
 		t.Fatalf("add %s: %v", id, err)
 	}
+	return f
 }
 
-func TestSuggestExtendersPairsWeakWithStrongest(t *testing.T) {
+func newSuggestionManager(t *testing.T) *Manager {
+	t.Helper()
 	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := New(store, WithDiscoveryInterval(0))
+	m.surveyWait = time.Millisecond
+	return m
+}
+
+func TestSuggestExtendersPairsWeakWithStrongest(t *testing.T) {
+	m := newSuggestionManager(t)
 	addFakeDevice(t, m, "shelly-strong", -48)
 	addFakeDevice(t, m, "shelly-mid", -62)
 	addFakeDevice(t, m, "shelly-weak", -81)
@@ -389,15 +407,14 @@ func TestSuggestExtendersPairsWeakWithStrongest(t *testing.T) {
 		if s.Extender != "shelly-strong" {
 			t.Errorf("suggested extender for %s = %s, want shelly-strong", s.Edge, s.Extender)
 		}
+		if s.Method != app.SuggestWiFiFallback {
+			t.Errorf("method = %q, want %q (empty survey must fall back)", s.Method, app.SuggestWiFiFallback)
+		}
 	}
 }
 
 func TestSuggestExtendersNoWeakDevices(t *testing.T) {
-	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := New(store, WithDiscoveryInterval(0))
+	m := newSuggestionManager(t)
 	addFakeDevice(t, m, "shelly-a", -50)
 	addFakeDevice(t, m, "shelly-b", -60)
 
@@ -464,11 +481,7 @@ func TestMergeAnnouncedEnrichesNewDevice(t *testing.T) {
 }
 
 func TestSuggestExtendersIgnoresZeroRSSI(t *testing.T) {
-	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := New(store, WithDiscoveryInterval(0))
+	m := newSuggestionManager(t)
 	addFakeDevice(t, m, "shelly-eth", 0) // Ethernet/AP-only: no WiFi uplink
 	addFakeDevice(t, m, "shelly-mid", -62)
 	addFakeDevice(t, m, "shelly-weak", -80)
@@ -509,5 +522,84 @@ func TestApplyMQTTPersistsOnlyWhenAccepted(t *testing.T) {
 	}
 	if got := m.store.Config().MQTT.Server; got != "broker.bad:1883" {
 		t.Fatalf("accepted broker not persisted: %q", got)
+	}
+}
+
+func TestSuggestExtendersPrefersBLEProximity(t *testing.T) {
+	m := newSuggestionManager(t)
+	addFakeDevice(t, m, "shelly-strong", -48)
+	addFakeDevice(t, m, "shelly-mid", -62)
+	weak := addFakeDevice(t, m, "shelly-weak", -81)
+	// The weak device hears shelly-mid loud and clear right next to it,
+	// while the strongest-wifi device is barely audible (far away).
+	weak.surveyJSON = `{
+		"aa:bb:cc:dd:ee:01": {"rssi": -45, "count": 12, "name": "shelly-mid"},
+		"aa:bb:cc:dd:ee:02": {"rssi": -87, "count": 3,  "name": "shelly-strong"}
+	}`
+
+	sugg, err := m.SuggestExtenders(context.Background())
+	if err != nil {
+		t.Fatalf("SuggestExtenders: %v", err)
+	}
+	if len(sugg) != 1 {
+		t.Fatalf("suggestions = %+v, want 1", sugg)
+	}
+	s := sugg[0]
+	if s.Extender != "shelly-mid" {
+		t.Fatalf("extender = %s, want the closest device shelly-mid (not the strongest-wifi one): %+v", s.Extender, s)
+	}
+	if s.Method != app.SuggestBLEProximity || s.BLERSSI != -45 {
+		t.Fatalf("method/blerssi = %q/%d, want %q/-45", s.Method, s.BLERSSI, app.SuggestBLEProximity)
+	}
+}
+
+func TestSuggestExtendersSkipsWeakNeighbors(t *testing.T) {
+	m := newSuggestionManager(t)
+	addFakeDevice(t, m, "shelly-strong", -48)
+	addFakeDevice(t, m, "shelly-alsoweak", -78)
+	weak := addFakeDevice(t, m, "shelly-weak", -81)
+	// The closest neighbor by BLE is itself weak — useless as an
+	// extender; the next match (strong) should win.
+	weak.surveyJSON = `{
+		"aa:bb:cc:dd:ee:01": {"rssi": -40, "count": 12, "name": "shelly-alsoweak"},
+		"aa:bb:cc:dd:ee:02": {"rssi": -70, "count": 5,  "name": "shelly-strong"}
+	}`
+
+	sugg, err := m.SuggestExtenders(context.Background())
+	if err != nil {
+		t.Fatalf("SuggestExtenders: %v", err)
+	}
+	// shelly-alsoweak also gets its own suggestion; find shelly-weak's.
+	var s *app.ExtenderSuggestion
+	for i := range sugg {
+		if sugg[i].Edge == "shelly-weak" {
+			s = &sugg[i]
+		}
+	}
+	if s == nil {
+		t.Fatalf("no suggestion for shelly-weak: %+v", sugg)
+	}
+	if s.Extender != "shelly-strong" || s.Method != app.SuggestBLEProximity {
+		t.Fatalf("suggestion = %+v, want shelly-strong via ble-proximity (weak neighbor skipped)", s)
+	}
+}
+
+func TestMatchSurveyByMACAdjacency(t *testing.T) {
+	devices := []shelly.Device{
+		{Addr: "192.0.2.5", Info: shelly.DeviceInfo{ID: "shellyplus1-x", MAC: "A8032AB12340"}},
+	}
+	seen := map[string]d2d.SurveyEntry{
+		// BLE MAC = WiFi MAC + 2, scanner formatting with colons and
+		// address-type suffix.
+		"a8:03:2a:b1:23:42 1": {RSSI: -55, Count: 4},
+	}
+	got := matchSurvey(seen, devices, "other")
+	if len(got) != 1 || got[0].key != "shellyplus1-x" || got[0].bleRSSI != -55 {
+		t.Fatalf("matchSurvey = %+v", got)
+	}
+	// Distance 3 must not match.
+	seen = map[string]d2d.SurveyEntry{"a8:03:2a:b1:23:43 1": {RSSI: -55, Count: 4}}
+	if got := matchSurvey(seen, devices, "other"); len(got) != 0 {
+		t.Fatalf("MAC three apart matched: %+v", got)
 	}
 }
