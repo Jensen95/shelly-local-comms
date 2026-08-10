@@ -317,6 +317,10 @@ func TestJoinExtenderValidation(t *testing.T) {
 	}{
 		{"empty ssid", APInfo{Enabled: true}, "SSID"},
 		{"ap not enabled", APInfo{SSID: "shelly-ext"}, "not enabled"},
+		// Shelly never returns the AP password over RPC; joining a
+		// protected AP without one would silently configure an empty
+		// password the edge device can never associate with.
+		{"protected ap without password", APInfo{SSID: "shelly-ext", Enabled: true}, "password-protected"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -447,7 +447,7 @@ func (l linksModel) view() string {
 	case lnkModeConfirmDelete:
 		return fmt.Sprintf("%s\n\n%s",
 			styleTitle.Render("Delete link"),
-			styleErrText.Render(fmt.Sprintf("Delete link %q? This does not undeploy the script. [y/n]", l.deleteName)))
+			styleErrText.Render(fmt.Sprintf("Delete link %q? This also undeploys its script from the source device. [y/n]", l.deleteName)))
 	case lnkModePreview:
 		var b strings.Builder
 		b.WriteString(styleTitle.Render("Script preview: "+l.previewTitle) + "\n")

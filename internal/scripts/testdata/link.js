@@ -18,8 +18,9 @@ let CONFIG = {
   httpTimeoutSec: 3
 };
 
-let ewmaMs = 0;  // EWMA of successful LAN round-trips (ms); 0 = no samples yet
 let attempt = 0; // per-attempt token: late callbacks from older attempts are ignored
+
+let ewmaMs = 0;  // EWMA of successful LAN round-trips (ms); 0 = no samples yet
 
 function recordRtt(rtt) {
   if (ewmaMs <= 0) {

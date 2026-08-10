@@ -270,3 +270,72 @@ func TestDiscoveryDisabled(t *testing.T) {
 	m.Start(ctx)
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestDiscoverPreservesFullInfoOnSparseResult(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	full := shelly.Device{
+		Addr: "192.0.2.10",
+		Info: shelly.DeviceInfo{
+			ID: "shelly-x", MAC: "AABBCCDDEEFF", Model: "SNSW-001X16EU",
+			Gen: 2, Name: "Hall", AuthEnabled: true,
+		},
+		Source: "manual",
+	}
+	if err := store.Update(func(c *app.Config) error {
+		c.Devices = append(c.Devices, full)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A sweep re-finds the device at a new address, but enrichment failed
+	// (auth-protected): only mDNS TXT data, no MAC/model/auth flag.
+	m.discoverFn = func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error) {
+		return []shelly.Device{{
+			Addr:   "192.0.2.20",
+			Info:   shelly.DeviceInfo{ID: "shelly-x", Gen: 2},
+			Source: "mdns",
+		}}, nil
+	}
+	if _, err := m.Discover(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	devs := m.Devices()
+	if len(devs) != 1 {
+		t.Fatalf("want 1 device, got %d", len(devs))
+	}
+	got := devs[0]
+	if got.Addr != "192.0.2.20" {
+		t.Errorf("Addr = %q, want updated 192.0.2.20", got.Addr)
+	}
+	if got.Source != "manual" {
+		t.Errorf("Source = %q, want preserved manual", got.Source)
+	}
+	if !got.Info.AuthEnabled || got.Info.MAC != "AABBCCDDEEFF" || got.Info.Name != "Hall" {
+		t.Errorf("full DeviceInfo was clobbered by sparse mDNS info: %+v", got.Info)
+	}
+}
+
+func TestDiscoverClampsTimeout(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	var gotTimeout time.Duration
+	m.discoverFn = func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error) {
+		gotTimeout = timeout
+		return nil, nil
+	}
+	if _, err := m.Discover(context.Background(), 8640000); err != nil {
+		t.Fatal(err)
+	}
+	if gotTimeout != maxDiscoverSeconds*time.Second {
+		t.Fatalf("timeout = %v, want clamped to %ds", gotTimeout, maxDiscoverSeconds)
+	}
+}

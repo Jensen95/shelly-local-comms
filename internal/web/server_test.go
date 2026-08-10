@@ -166,6 +166,9 @@ func do(t *testing.T, ts *httptest.Server, method, path, body string) *http.Resp
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	res, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
@@ -641,5 +644,25 @@ func TestServeBadAddr(t *testing.T) {
 	err := Serve(context.Background(), "127.0.0.1:-1", &fakeManager{})
 	if err == nil {
 		t.Fatal("Serve with invalid addr returned nil error")
+	}
+}
+
+func TestStateChangingPostRejectsNonJSONContentType(t *testing.T) {
+	ts := newTestServer(t, &fakeManager{})
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/settings/mqtt",
+		strings.NewReader(`{"settings":{"enable":true,"server":"evil:1883"},"devices":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A cross-origin page can send text/plain without a CORS preflight;
+	// the API must refuse it.
+	req.Header.Set("Content-Type", "text/plain")
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = res.Body.Close() })
+	if res.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415", res.StatusCode)
 	}
 }

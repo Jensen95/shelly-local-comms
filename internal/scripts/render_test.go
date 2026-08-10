@@ -200,14 +200,14 @@ func TestRenderMarkersRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	for _, m := range []string{markerBLEDetect, markerBLECall, markerEWMAUpdate, markerEvent, `strategy: "race"`, "racing LAN + BLE"} {
+	for _, m := range []string{markerBLEDetect, markerBLECall, markerEvent, `strategy: "race"`, "racing LAN + BLE"} {
 		if !strings.Contains(got, m) {
 			t.Errorf("race script missing marker %q", m)
 		}
 	}
 	// Race mode fires both tiers immediately: no failover timer, no
-	// bleFallback function.
-	for _, m := range []string{markerTimerRace, "function bleFallback()"} {
+	// bleFallback function, and no EWMA bookkeeping (nothing reads it).
+	for _, m := range []string{markerTimerRace, "function bleFallback()", markerEWMAUpdate, "ewmaMs"} {
 		if strings.Contains(got, m) {
 			t.Errorf("race script must not contain %q", m)
 		}

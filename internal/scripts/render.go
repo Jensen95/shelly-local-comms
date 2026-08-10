@@ -184,16 +184,7 @@ let CONFIG = {
   httpTimeoutSec: {{.HTTPTimeoutSec}}
 };
 
-let ewmaMs = 0;  // EWMA of successful LAN round-trips (ms); 0 = no samples yet
 let attempt = 0; // per-attempt token: late callbacks from older attempts are ignored
-
-function recordRtt(rtt) {
-  if (ewmaMs <= 0) {
-    ewmaMs = rtt;
-  } else {
-    ewmaMs = 0.3 * rtt + 0.7 * ewmaMs;
-  }
-}
 {{if .Race}}
 // Race strategy: the target action is idempotent, so LAN and BLE fire
 // simultaneously; the faster path wins and the duplicate is harmless.
@@ -211,7 +202,6 @@ function onTrigger() {
     if (token !== attempt) return;
     let rtt = Date.now() - start;
     if (err_code === 0 && res && res.code === 200) {
-      recordRtt(rtt);
       if (winner === "") winner = "lan";
       print("shellyctl[" + CONFIG.linkId + "]: LAN ok in " + rtt + "ms" + (winner === "lan" ? " (won)" : ""));
     } else {
@@ -234,6 +224,16 @@ function onTrigger() {
   }
 }
 {{else}}
+let ewmaMs = 0;  // EWMA of successful LAN round-trips (ms); 0 = no samples yet
+
+function recordRtt(rtt) {
+  if (ewmaMs <= 0) {
+    ewmaMs = rtt;
+  } else {
+    ewmaMs = 0.3 * rtt + 0.7 * ewmaMs;
+  }
+}
+
 function adaptiveTimeoutMs() {
   if (ewmaMs <= 0) return CONFIG.baseTimeoutMs;
   let t = ewmaMs * CONFIG.latencyFactor;

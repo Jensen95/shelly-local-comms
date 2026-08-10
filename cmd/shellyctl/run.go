@@ -32,7 +32,9 @@ func run(args []string) error {
 		})
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-		addr := fs.String("addr", ":8790", "listen address")
+		// Localhost by default: the API is unauthenticated, so exposing it
+		// to the LAN is an explicit choice (-addr :8790).
+		addr := fs.String("addr", "127.0.0.1:8790", "listen address (use :8790 to expose on the LAN — no auth!)")
 		configPath := configFlag(fs)
 		discoverEvery := discoverFlag(fs)
 		if err := fs.Parse(rest); err != nil {
@@ -45,7 +47,7 @@ func run(args []string) error {
 		ctx, stop := signalContext()
 		defer stop()
 		m.Start(ctx)
-		fmt.Printf("shellyctl web UI on http://localhost%s\n", displayAddr(*addr))
+		fmt.Printf("shellyctl web UI on %s\n", displayURL(*addr))
 		return web.Serve(ctx, *addr, m)
 	case "discover":
 		fs := flag.NewFlagSet("discover", flag.ContinueOnError)
@@ -127,9 +129,9 @@ func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-func displayAddr(addr string) string {
+func displayURL(addr string) string {
 	if addr != "" && addr[0] == ':' {
-		return addr
+		return "http://localhost" + addr
 	}
-	return " (" + addr + ")"
+	return "http://" + addr
 }

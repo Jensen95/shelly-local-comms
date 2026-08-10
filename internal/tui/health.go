@@ -12,7 +12,7 @@ import (
 	"github.com/Jensen95/shelly-local-comms/internal/app"
 )
 
-const healthLegend = "Degraded devices (high latency or repeated probe failures) push their deployed links toward the BLE fallback: the generated scripts tighten the LAN timeout toward its floor so failover stays fast."
+const healthLegend = "Degraded = high latency or repeated probe failures. Deploying a link seeds its LAN timeout from the latency observed here (the script keeps adapting on-device); redeploy a link to re-seed it after network conditions change."
 
 type healthModel struct {
 	mgr  app.Manager

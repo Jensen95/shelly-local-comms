@@ -145,6 +145,12 @@ func JoinExtender(ctx context.Context, edge shelly.Caller, ap APInfo) (bool, err
 	if !ap.Enabled {
 		return false, fmt.Errorf("join extender: extender AP %q is not enabled", ap.SSID)
 	}
+	// Shelly devices do not return the AP password from WiFi.GetConfig, so
+	// a protected AP whose password we don't have would be joined with an
+	// empty one: the RPC succeeds but the edge device can never associate.
+	if !ap.OpenAuth && ap.Password == "" {
+		return false, fmt.Errorf("join extender: AP %q is password-protected but the device does not expose its password over RPC — supply it manually or make the AP open", ap.SSID)
+	}
 	sta1 := map[string]any{
 		"ssid":   ap.SSID,
 		"enable": true,

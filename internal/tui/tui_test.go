@@ -552,7 +552,7 @@ func TestHealthTabRendering(t *testing.T) {
 	mustContain(t, view, "250.0")
 	mustContain(t, view, "yes")
 	mustContain(t, view, "timeout")
-	mustContain(t, view, "BLE fallback")
+	mustContain(t, view, "seeds its LAN timeout")
 }
 
 func TestSettingsMQTTApply(t *testing.T) {

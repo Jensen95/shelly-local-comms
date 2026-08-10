@@ -26,6 +26,9 @@ const DefaultDiscoveryInterval = 5 * time.Minute
 // sweep.
 const autoDiscoverScanSeconds = 5
 
+// maxDiscoverSeconds caps a single on-demand discovery scan.
+const maxDiscoverSeconds = 60
+
 // Manager is the concrete app.Manager implementation.
 type Manager struct {
 	store         *app.Store
@@ -124,6 +127,11 @@ func (m *Manager) Discover(ctx context.Context, timeoutSeconds int) ([]shelly.De
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 5
 	}
+	// Cap the browse: an unbounded scan would pin an mDNS listener (and,
+	// via the web API, an HTTP handler) for arbitrarily long.
+	if timeoutSeconds > maxDiscoverSeconds {
+		timeoutSeconds = maxDiscoverSeconds
+	}
 	found, err := m.discoverFn(ctx, time.Duration(timeoutSeconds)*time.Second)
 	if err != nil {
 		return nil, err
@@ -136,9 +144,20 @@ func (m *Manager) Discover(ctx context.Context, timeoutSeconds int) ([]shelly.De
 		}
 		for _, d := range found {
 			if i, ok := known[d.Key()]; ok {
-				d.Source = c.Devices[i].Source
+				existing := c.Devices[i]
+				d.Source = existing.Source
 				if d.BLEMAC == "" {
-					d.BLEMAC = c.Devices[i].BLEMAC
+					d.BLEMAC = existing.BLEMAC
+				}
+				// Discovery info is sparse when enrichment failed (mDNS TXT
+				// carries no MAC, model, name or auth flag — and enrichment
+				// always fails for password-protected devices). Keep the
+				// last full DeviceInfo in that case: overwriting it would,
+				// among other things, drop AuthEnabled and defeat the
+				// deployer's auth guard. A successful GetDeviceInfo is
+				// recognizable by a non-empty MAC.
+				if d.Info.MAC == "" && existing.Info.MAC != "" {
+					d.Info = existing.Info
 				}
 				c.Devices[i] = d
 				continue
@@ -319,12 +338,25 @@ func (m *Manager) linkEndpoints(id string) (app.Link, shelly.Device, shelly.Devi
 	return l, src, tgt, nil
 }
 
+// tuneFallback seeds the link's LAN timeout floor from the manager's
+// observed latency to the target, so a script deployed while the network
+// is congested starts with a realistic timeout instead of the static
+// default. With no probe samples SuggestedTimeout returns the configured
+// floor and this is a no-op.
+func (m *Manager) tuneFallback(l app.Link) app.Link {
+	suggested := m.prober.SuggestedTimeout(l.TargetDevice, l.Fallback)
+	if ms := int(suggested / time.Millisecond); ms > l.Fallback.BaseTimeoutMs {
+		l.Fallback.BaseTimeoutMs = ms
+	}
+	return l
+}
+
 func (m *Manager) DeployLink(ctx context.Context, id string) error {
 	l, src, tgt, err := m.linkEndpoints(id)
 	if err != nil {
 		return err
 	}
-	scriptID, err := m.deployer.Deploy(ctx, src, l, tgt)
+	scriptID, err := m.deployer.Deploy(ctx, src, m.tuneFallback(l), tgt)
 	if err != nil {
 		return err
 	}
@@ -344,7 +376,7 @@ func (m *Manager) RenderLinkScript(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return m.deployer.Render(l, tgt)
+	return m.deployer.Render(m.tuneFallback(l), tgt)
 }
 
 // --- Shared settings ---

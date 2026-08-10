@@ -75,10 +75,13 @@ $$(".nav-btn").forEach((btn) => {
 
 function latencyBadge(key) {
   const st = state.health.find((s) => s.device === key);
-  if (!st || st.samples === 0) return el("span", { class: "badge grey" }, "no data");
-  if (st.degraded || (st.failures > 0 && st.samples === st.failures)) {
-    return el("span", { class: "badge red" }, st.last_error ? "unreachable" : "degraded");
+  if (!st) return el("span", { class: "badge grey" }, "no data");
+  if (st.degraded) {
+    // Degraded outranks "no data": a device that never answered a probe
+    // is unreachable, not unknown.
+    return el("span", { class: "badge red" }, st.samples === 0 ? "unreachable" : "degraded");
   }
+  if (st.samples === 0) return el("span", { class: "badge grey" }, "no data");
   const ms = nsToMs(st.ewma);
   if (ms < 150) return el("span", { class: "badge green" }, fmtMs(st.ewma));
   if (ms < 300) return el("span", { class: "badge amber" }, fmtMs(st.ewma));

@@ -191,7 +191,10 @@ func (s *server) saveLink(w http.ResponseWriter, r *http.Request) {
 	}
 	saved, err := s.m.SaveLink(l)
 	if err != nil {
-		writeManagerError(w, err)
+		// Every SaveLink failure is a rejection of the submitted link
+		// (unknown device reference, bad strategy, non-idempotent method
+		// for race) — a client error, not a lookup or server fault.
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, saved)
@@ -358,8 +361,15 @@ func writeManagerError(w http.ResponseWriter, err error) {
 }
 
 // decodeJSON decodes the request body into dst, writing a 400 JSON error
-// and returning false when the body is missing or malformed.
+// and returning false when the body is missing or malformed. Bodies must
+// be declared application/json: cross-origin pages can POST text/plain
+// without a CORS preflight, so rejecting other content types blocks the
+// simple-request CSRF vector against state-changing endpoints.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+		writeError(w, http.StatusUnsupportedMediaType, "request body must be application/json")
+		return false
+	}
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return false
