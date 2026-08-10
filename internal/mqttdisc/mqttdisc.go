@@ -5,8 +5,9 @@
 // via the broker (last will). Both cross subnet/VLAN boundaries that stop
 // mDNS, so any device that can reach the broker becomes discoverable:
 //
-//   - subscribe to `+/announce` (Gen2+ per-device topics) and
-//     `shellies/announce` (the Gen1 shared topic)
+//   - subscribe to `+/announce` (per-device topics) and
+//     `shellies/announce` (the shared topic Gen2+ devices also publish
+//     their announce to)
 //   - broadcast "announce" to `shellies/command` on connect
 //   - when `<prefix>/online` reports true, ask that device directly via
 //     `<prefix>/command`
@@ -29,30 +30,65 @@ type Broker interface {
 
 // Listener turns announce traffic on a broker into device callbacks.
 type Listener struct {
-	b        Broker
-	onDevice func(shelly.Device)
+	b             Broker
+	onDevice      func(shelly.Device)
+	extraPrefixes []string
 
 	mu        sync.Mutex
 	requested map[string]bool
 }
 
+// ListenerOption configures a Listener.
+type ListenerOption func(*Listener)
+
+// WithExtraPrefix adds a device topic prefix to subscribe explicitly.
+// The default "+/announce" and "+/online" wildcards match one topic level
+// only, so a prefix containing "/" (which this tool itself can configure
+// via MQTT settings) would otherwise be missed. Empty or single-level
+// prefixes are ignored — the wildcard already covers them.
+func WithExtraPrefix(prefix string) ListenerOption {
+	return func(l *Listener) {
+		if strings.Contains(prefix, "/") {
+			l.extraPrefixes = append(l.extraPrefixes, prefix)
+		}
+	}
+}
+
 // NewListener creates a listener that reports every announced device to
 // onDevice. Call Start to subscribe and solicit announcements.
-func NewListener(b Broker, onDevice func(shelly.Device)) *Listener {
-	return &Listener{b: b, onDevice: onDevice, requested: map[string]bool{}}
+func NewListener(b Broker, onDevice func(shelly.Device), opts ...ListenerOption) *Listener {
+	l := &Listener{b: b, onDevice: onDevice, requested: map[string]bool{}}
+	for _, o := range opts {
+		o(l)
+	}
+	return l
 }
 
 // Start subscribes to the announce and online topics and broadcasts an
 // announce request.
 func (l *Listener) Start() error {
-	if err := l.b.Subscribe("+/announce", l.handleAnnounce); err != nil {
-		return err
+	// Gen2+ devices publish their announce to BOTH <prefix>/announce and
+	// the shared shellies/announce topic, so the shared topic catches
+	// devices whose prefix the wildcard misses; Gen1-only payloads
+	// arriving there are filtered by parseAnnounce.
+	type sub struct {
+		topic string
+		cb    func(string, []byte)
 	}
-	if err := l.b.Subscribe("shellies/announce", l.handleAnnounce); err != nil {
-		return err
+	subs := []sub{
+		{"+/announce", l.handleAnnounce},
+		{"shellies/announce", l.handleAnnounce},
+		{"+/online", l.handleOnline},
 	}
-	if err := l.b.Subscribe("+/online", l.handleOnline); err != nil {
-		return err
+	for _, p := range l.extraPrefixes {
+		subs = append(subs,
+			sub{p + "/announce", l.handleAnnounce},
+			sub{p + "/online", l.handleOnline})
+	}
+	for _, s := range subs {
+		if err := l.b.Subscribe(s.topic, s.cb); err != nil {
+			return err
+		}
 	}
 	return l.RequestAnnounce()
 }

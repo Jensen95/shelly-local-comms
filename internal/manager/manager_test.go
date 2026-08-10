@@ -22,6 +22,7 @@ type fakeDevice struct {
 	scriptID int
 	running  bool
 	rssi     int
+	failMQTT bool
 }
 
 func (f *fakeDevice) handler() http.HandlerFunc {
@@ -63,6 +64,15 @@ func (f *fakeDevice) handler() http.HandlerFunc {
 			}}
 		case "WiFi.GetStatus":
 			result = map[string]any{"sta_ip": "192.0.2.1", "status": "got ip", "ssid": "home", "rssi": f.rssi}
+		case "MQTT.SetConfig":
+			if f.failMQTT {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": req.ID, "src": f.id,
+					"error": map[string]any{"code": -108, "message": "mqtt rejected"},
+				})
+				return
+			}
+			result = map[string]any{"restart_required": false}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "src": f.id, "result": result})
 	}
@@ -450,5 +460,54 @@ func TestMergeAnnouncedEnrichesNewDevice(t *testing.T) {
 	}
 	if devs[0].Source != "mqtt" {
 		t.Errorf("Source = %q, want mqtt", devs[0].Source)
+	}
+}
+
+func TestSuggestExtendersIgnoresZeroRSSI(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	addFakeDevice(t, m, "shelly-eth", 0) // Ethernet/AP-only: no WiFi uplink
+	addFakeDevice(t, m, "shelly-mid", -62)
+	addFakeDevice(t, m, "shelly-weak", -80)
+
+	sugg, err := m.SuggestExtenders(context.Background())
+	if err != nil {
+		t.Fatalf("SuggestExtenders: %v", err)
+	}
+	if len(sugg) != 1 || sugg[0].Extender != "shelly-mid" {
+		t.Fatalf("suggestions = %+v, want weak paired with shelly-mid (never the rssi-0 device)", sugg)
+	}
+}
+
+func TestApplyMQTTPersistsOnlyWhenAccepted(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	f := &fakeDevice{t: t, id: "shelly-a", failMQTT: true}
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+	if _, err := m.AddDevice(context.Background(), strings.TrimPrefix(srv.URL, "http://"), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	s := app.MQTTSettings{Enable: true, Server: "broker.bad:1883"}
+	if err := m.ApplyMQTT(context.Background(), s, nil); err == nil {
+		t.Fatal("expected apply error from rejecting device")
+	}
+	if got := m.store.Config().MQTT.Server; got != "" {
+		t.Fatalf("rejected broker was persisted: %q", got)
+	}
+
+	f.failMQTT = false
+	if err := m.ApplyMQTT(context.Background(), s, nil); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := m.store.Config().MQTT.Server; got != "broker.bad:1883" {
+		t.Fatalf("accepted broker not persisted: %q", got)
 	}
 }

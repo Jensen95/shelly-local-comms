@@ -56,7 +56,13 @@ func (svc *Service) Run(ctx context.Context) error {
 		SetClientID("shellyctl-" + randomID()).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
-		SetConnectRetryInterval(10 * time.Second)
+		SetConnectRetryInterval(10 * time.Second).
+		// Handlers block (device enrichment over HTTP, config writes) and
+		// publish back into the broker; with ordered dispatch paho runs
+		// them inline in its single router goroutine, which stalls the
+		// client and can deadlock on a full outbound queue. Unordered
+		// dispatch runs each handler in its own goroutine.
+		SetOrderMatters(false)
 	if svc.settings.User != "" {
 		opts.SetUsername(svc.settings.User)
 	}
@@ -77,7 +83,8 @@ func (svc *Service) Run(ctx context.Context) error {
 
 	client := mqtt.NewClient(opts)
 	svc.mu.Lock()
-	svc.listener = NewListener(&pahoBroker{c: client}, svc.onDevice)
+	svc.listener = NewListener(&pahoBroker{c: client}, svc.onDevice,
+		WithExtraPrefix(svc.settings.TopicPrefix))
 	svc.mu.Unlock()
 	client.Connect() // retried in the background per SetConnectRetry
 

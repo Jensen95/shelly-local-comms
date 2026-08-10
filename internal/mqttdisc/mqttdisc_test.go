@@ -164,3 +164,38 @@ func TestRequestAnnounceRearmsOnlineRequests(t *testing.T) {
 		t.Fatalf("broadcasts = %d, per-device asks = %d; want 2 and 2", broadcasts, asks)
 	}
 }
+
+func TestExtraPrefixSubscriptions(t *testing.T) {
+	b := newFakeBroker()
+	var got []shelly.Device
+	l := NewListener(b, func(d shelly.Device) { got = append(got, d) },
+		WithExtraPrefix("home/plug1"),
+		WithExtraPrefix("flat")) // single level: wildcard covers it, ignored
+	if err := l.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, ok := b.subs["home/plug1/announce"]; !ok {
+		t.Fatal("multi-level prefix announce topic not subscribed")
+	}
+	if _, ok := b.subs["flat/announce"]; ok {
+		t.Fatal("single-level prefix should rely on the + wildcard")
+	}
+
+	b.deliver(t, "home/plug1/announce",
+		`{"id":"shellyplus1-deep","ip":"192.168.2.9","gen":2}`)
+	if len(got) != 1 || got[0].Info.ID != "shellyplus1-deep" {
+		t.Fatalf("devices = %+v, want the multi-level-prefix device", got)
+	}
+
+	// online under the deep prefix triggers a per-device ask there too.
+	b.deliver(t, "home/plug1/online", "true")
+	found := false
+	for _, p := range b.published() {
+		if p == [2]string{"home/plug1/command", "announce"} {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("online under multi-level prefix did not trigger an announce ask")
+	}
+}

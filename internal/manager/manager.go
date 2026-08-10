@@ -41,9 +41,13 @@ type Manager struct {
 	discoverEvery time.Duration
 	// discoverFn is shelly.Discover in production; tests inject a fake.
 	discoverFn func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error)
-	// mqtt is the announce-discovery service, nil when no broker is
-	// configured at construction time.
-	mqtt *mqttdisc.Service
+	// MQTT announce-discovery. mqttMu guards the service pointer and
+	// cancel; runCtx (set by Start) parents the service's lifetime so
+	// ApplyMQTT can (re)start discovery in the running process.
+	mqttMu     sync.Mutex
+	mqtt       *mqttdisc.Service
+	mqttCancel context.CancelFunc
+	runCtx     context.Context
 }
 
 var _ app.Manager = (*Manager)(nil)
@@ -70,9 +74,6 @@ func New(store *app.Store, opts ...Option) *Manager {
 	m.prober = transport.NewProber(m.callerFor)
 	m.deployer = d2d.NewDeployer(m.callerFor)
 	m.prober.SetDevices(store.Config().Devices)
-	if s := store.Config().MQTT; s.Enable && s.Server != "" {
-		m.mqtt = mqttdisc.NewService(s, m.mergeAnnounced)
-	}
 	return m
 }
 
@@ -85,9 +86,37 @@ func (m *Manager) Start(ctx context.Context) {
 	if m.discoverEvery > 0 {
 		go m.autoDiscover(ctx)
 	}
-	if m.mqtt != nil {
-		go func() { _ = m.mqtt.Run(ctx) }()
+	m.mqttMu.Lock()
+	m.runCtx = ctx
+	m.mqttMu.Unlock()
+	m.startMQTTDiscovery(m.store.Config().MQTT)
+}
+
+// startMQTTDiscovery (re)starts announce-discovery against the broker in
+// s, stopping any previous service. A no-op before Start has provided the
+// lifetime context, when discovery is disabled, or with no broker set.
+func (m *Manager) startMQTTDiscovery(s app.MQTTSettings) {
+	m.mqttMu.Lock()
+	defer m.mqttMu.Unlock()
+	if m.mqttCancel != nil {
+		m.mqttCancel()
+		m.mqttCancel = nil
+		m.mqtt = nil
 	}
+	if m.runCtx == nil || !s.Enable || s.Server == "" {
+		return
+	}
+	ctx, cancel := context.WithCancel(m.runCtx)
+	svc := mqttdisc.NewService(s, m.mergeAnnounced)
+	m.mqtt, m.mqttCancel = svc, cancel
+	go func() { _ = svc.Run(ctx) }()
+}
+
+// mqttService returns the running announce-discovery service, if any.
+func (m *Manager) mqttService() *mqttdisc.Service {
+	m.mqttMu.Lock()
+	defer m.mqttMu.Unlock()
+	return m.mqtt
 }
 
 // mergeAnnounced registers a device reported by MQTT announce-discovery.
@@ -97,7 +126,13 @@ func (m *Manager) Start(ctx context.Context) {
 // accurate; if that fails the announce data is still good enough to list
 // it.
 func (m *Manager) mergeAnnounced(d shelly.Device) {
-	if _, known := m.deviceByKey(d.Key()); !known {
+	if existing, known := m.deviceByKey(d.Key()); known {
+		// Every periodic re-announce lands here; skip the config write
+		// and prober reset when nothing changed.
+		if existing.Addr == d.Addr {
+			return
+		}
+	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if info, err := shelly.NewClient(d.Addr).GetDeviceInfo(ctx); err == nil {
 			d.Info = info
@@ -177,8 +212,8 @@ func (m *Manager) Discover(ctx context.Context, timeoutSeconds int) ([]shelly.De
 	// A refresh should sweep every channel: re-solicit MQTT announces too.
 	// Their responses arrive asynchronously via mergeAnnounced, so only
 	// the mDNS finds are in this call's return value.
-	if m.mqtt != nil {
-		m.mqtt.RequestAnnounce()
+	if svc := m.mqttService(); svc != nil {
+		svc.RequestAnnounce()
 	}
 	found, err := m.discoverFn(ctx, time.Duration(timeoutSeconds)*time.Second)
 	if err != nil {
@@ -458,15 +493,27 @@ func (m *Manager) ApplyMQTT(ctx context.Context, s app.MQTTSettings, keys []stri
 	if err != nil {
 		return err
 	}
-	// Remember the broker: Start uses it for MQTT announce-discovery
-	// (picked up on the next start of the tool).
-	if err := m.store.Update(func(c *app.Config) error {
-		c.MQTT = s
-		return nil
-	}); err != nil {
-		return err
+	results := settings.ApplyMQTTBulk(ctx, callers, s)
+	// Remember the broker and (re)start announce-discovery against it —
+	// but only once at least one device actually accepted the config, so
+	// a mistyped broker host is not persisted as the discovery target.
+	accepted := len(results) == 0
+	for _, r := range results {
+		if r.Err == nil {
+			accepted = true
+			break
+		}
 	}
-	return collectResults(ctx, callers, settings.ApplyMQTTBulk(ctx, callers, s))
+	if accepted {
+		if err := m.store.Update(func(c *app.Config) error {
+			c.MQTT = s
+			return nil
+		}); err != nil {
+			return err
+		}
+		m.startMQTTDiscovery(s)
+	}
+	return collectResults(ctx, callers, results)
 }
 
 func (m *Manager) ApplyBLE(ctx context.Context, s app.BLESettings, keys []string) error {
@@ -573,6 +620,13 @@ func (m *Manager) SuggestExtenders(ctx context.Context) ([]app.ExtenderSuggestio
 				return
 			}
 			okCount.Add(1)
+			// A device whose WiFi station is down (Ethernet or AP-only)
+			// reports no rssi, which decodes to 0 — the "strongest"
+			// possible value. Only real dBm readings participate.
+			if st.RSSI >= 0 {
+				readings[i] = reading{key: "", rssi: 0}
+				return
+			}
 			readings[i] = reading{key: d.Key(), rssi: st.RSSI}
 		}()
 	}
