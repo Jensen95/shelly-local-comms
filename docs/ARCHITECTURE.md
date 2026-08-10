@@ -44,6 +44,21 @@ UI) over one shared core.
 Dependency rule: UIs depend only on `internal/app.Manager`. The concrete
 manager wires transport/d2d/settings together.
 
+## Trigger strategies
+
+Each link picks one of two on-device strategies:
+
+- **fallback** (default): LAN RPC first with a latency-adaptive timeout;
+  BLE RPC only when LAN fails or times out. Safe for any target method,
+  including non-idempotent ones like `Switch.Toggle` — exactly one path
+  delivers.
+- **race**: LAN and BLE fire simultaneously; the faster path wins and the
+  slower duplicate is harmless. Lowest worst-case latency (no timeout to
+  wait out), but both paths may deliver, so the target method must be
+  IDEMPOTENT (e.g. `Switch.Set` with explicit params). Toggle-style
+  methods are rejected at save/render time — delivered twice they cancel
+  themselves out.
+
 ## The generated link script
 
 For each link the source device gets one script that:

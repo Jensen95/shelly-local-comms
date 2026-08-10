@@ -6,7 +6,8 @@ Cloud, no Home Assistant required.
 - **Device-to-device links**: an input on one Shelly triggers an action on
   another via an auto-generated on-device script — LAN RPC first, **BLE RPC
   fallback** when WiFi is down, with latency-adaptive timeouts so failover
-  stays fast on a congested network.
+  stays fast on a congested network. For idempotent actions there is also a
+  **race strategy**: LAN and BLE fire together and the faster path wins.
 - **Bulk shared settings**: MQTT broker config, Bluetooth enable / BLE RPC /
   BLU observer mode across many devices at once.
 - **Edge devices**: bridge devices at the fringe of WiFi coverage through a

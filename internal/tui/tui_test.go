@@ -374,7 +374,9 @@ func TestLinkWizardHappyPath(t *testing.T) {
 	m = press(t, m, "enter")
 	// Step: params JSON — keep default {"id":0}.
 	m = press(t, m, "enter")
-	// Step: BLE fallback (default on) — enter saves.
+	// Step: BLE fallback (default on) — advance.
+	m = press(t, m, "enter")
+	// Step: strategy (default fallback) — enter saves.
 	m = press(t, m, "enter")
 
 	if len(f.savedLinks) != 1 {
@@ -405,6 +407,9 @@ func TestLinkWizardHappyPath(t *testing.T) {
 	if !got.Fallback.BLEEnabled {
 		t.Errorf("Fallback.BLEEnabled = false, want true")
 	}
+	if got.Fallback.Strategy != app.StrategyFallback {
+		t.Errorf("Fallback.Strategy = %q, want %q", got.Fallback.Strategy, app.StrategyFallback)
+	}
 	if got.Fallback.BaseTimeoutMs != app.DefaultFallback().BaseTimeoutMs {
 		t.Errorf("Fallback.BaseTimeoutMs = %d, want default", got.Fallback.BaseTimeoutMs)
 	}
@@ -425,8 +430,8 @@ func TestLinkWizardInvalidParamsJSON(t *testing.T) {
 	// Corrupt the params JSON.
 	m = press(t, m, "ctrl+u")
 	m = typeText(t, m, "{nope")
-	// Params -> BLE step -> attempt save.
-	m = press(t, m, "enter", "enter")
+	// Params -> BLE -> strategy step -> attempt save.
+	m = press(t, m, "enter", "enter", "enter")
 
 	if len(f.savedLinks) != 0 {
 		t.Fatalf("SaveLink called %d times, want 0", len(f.savedLinks))
@@ -436,7 +441,7 @@ func TestLinkWizardInvalidParamsJSON(t *testing.T) {
 	// Fix the JSON and save successfully.
 	m = press(t, m, "ctrl+u")
 	m = typeText(t, m, `{"id":1}`)
-	press(t, m, "enter", "enter")
+	press(t, m, "enter", "enter", "enter")
 	if len(f.savedLinks) != 1 {
 		t.Fatalf("SaveLink called %d times after fix, want 1", len(f.savedLinks))
 	}

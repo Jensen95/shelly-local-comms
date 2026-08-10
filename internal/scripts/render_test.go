@@ -186,3 +186,67 @@ func TestRenderEscapesStrings(t *testing.T) {
 		t.Errorf("newline in Name leaked out of the header comment")
 	}
 }
+
+func raceParams() Params {
+	p := representativeParams()
+	p.TargetMethod = "Switch.Set"
+	p.TargetParams = map[string]any{"id": 0, "on": true}
+	p.Fallback.Strategy = app.StrategyRace
+	return p
+}
+
+func TestRenderMarkersRace(t *testing.T) {
+	got, err := Render(raceParams())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, m := range []string{markerBLEDetect, markerBLECall, markerEWMAUpdate, markerEvent, `strategy: "race"`, "racing LAN + BLE"} {
+		if !strings.Contains(got, m) {
+			t.Errorf("race script missing marker %q", m)
+		}
+	}
+	// Race mode fires both tiers immediately: no failover timer, no
+	// bleFallback function.
+	for _, m := range []string{markerTimerRace, "function bleFallback()"} {
+		if strings.Contains(got, m) {
+			t.Errorf("race script must not contain %q", m)
+		}
+	}
+	if len(got) >= 5*1024 {
+		t.Errorf("race script is %d bytes, must stay well under 5KB", len(got))
+	}
+}
+
+func TestRenderRaceRejectsNonIdempotentMethod(t *testing.T) {
+	p := raceParams()
+	p.TargetMethod = "Switch.Toggle"
+	if _, err := Render(p); err == nil || !strings.Contains(err.Error(), "idempotent") {
+		t.Fatalf("want idempotency error for race+Toggle, got %v", err)
+	}
+}
+
+func TestRenderUnknownStrategy(t *testing.T) {
+	p := representativeParams()
+	p.Fallback.Strategy = "sometimes"
+	if _, err := Render(p); err == nil || !strings.Contains(err.Error(), "unknown strategy") {
+		t.Fatalf("want unknown-strategy error, got %v", err)
+	}
+}
+
+func TestRenderRaceWithoutMACDowngradesToFallback(t *testing.T) {
+	p := raceParams()
+	p.TargetBLEMAC = ""
+	got, err := Render(p)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.Contains(got, markerBLECall) || strings.Contains(got, "racing LAN + BLE") {
+		t.Error("race without a BLE MAC must degrade to the LAN-only fallback script")
+	}
+	if !strings.Contains(got, markerTimerRace) {
+		t.Errorf("degraded script missing fallback timer %q", markerTimerRace)
+	}
+	if !strings.Contains(got, `strategy: "fallback"`) {
+		t.Error(`degraded script should declare strategy: "fallback"`)
+	}
+}

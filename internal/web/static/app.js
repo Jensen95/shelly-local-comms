@@ -201,9 +201,14 @@ function renderLinks() {
     const deployed = l.deployed_script_id
       ? el("span", { class: "badge green" }, `script #${l.deployed_script_id}`)
       : el("span", { class: "badge grey" }, "not deployed");
-    const bleChip = l.fallback && l.fallback.ble_enabled
-      ? el("span", { class: "chip on" }, "BLE fallback")
-      : el("span", { class: "chip" }, "LAN only");
+    let bleChip;
+    if (l.fallback && l.fallback.ble_enabled) {
+      bleChip = l.fallback.strategy === "race"
+        ? el("span", { class: "chip on" }, "LAN + BLE race")
+        : el("span", { class: "chip on" }, "BLE fallback");
+    } else {
+      bleChip = el("span", { class: "chip" }, "LAN only");
+    }
     body.append(
       el("tr", {},
         el("td", {}, l.name || l.id),
@@ -280,6 +285,7 @@ function editLink(l) {
   form.elements.max_timeout_ms.value = f.max_timeout_ms || 1500;
   form.elements.latency_factor.value = f.latency_factor || 4;
   form.elements.ble_enabled.checked = !!f.ble_enabled;
+  form.elements.strategy.value = f.strategy === "race" ? "race" : "fallback";
   form.scrollIntoView({ behavior: "smooth" });
 }
 
@@ -315,12 +321,17 @@ $("#link-form").addEventListener("submit", async (ev) => {
     target_method: form.elements.target_method.value.trim() || "Switch.Toggle",
     target_params: params || undefined,
     fallback: {
+      strategy: form.elements.strategy.value,
       ble_enabled: form.elements.ble_enabled.checked,
       base_timeout_ms: Number(form.elements.base_timeout_ms.value) || 0,
       max_timeout_ms: Number(form.elements.max_timeout_ms.value) || 0,
       latency_factor: Number(form.elements.latency_factor.value) || 0,
     },
   };
+  if (body.fallback.strategy === "race" && /\.toggle$/i.test(body.target_method)) {
+    toast("Race strategy needs an idempotent method — a Toggle fired over both LAN and BLE would undo itself. Use Switch.Set with explicit params, or the fallback strategy.", true);
+    return;
+  }
   try {
     await api("/api/links", { method: "POST", body });
     toast("Link saved");

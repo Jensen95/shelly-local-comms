@@ -181,3 +181,31 @@ func TestJoinExtenderRequiresActiveExtender(t *testing.T) {
 		t.Fatalf("expected inactive-extender error, got %v", err)
 	}
 }
+
+func TestSaveLinkStrategyValidation(t *testing.T) {
+	m, _ := newTestManager(t)
+	base := app.Link{SourceDevice: "shelly-src", TargetDevice: "shelly-tgt",
+		SourceComponent: "input:0", SourceEvent: "toggle"}
+
+	race := base
+	race.TargetMethod = "Switch.Toggle"
+	race.Fallback = app.DefaultFallback()
+	race.Fallback.Strategy = app.StrategyRace
+	if _, err := m.SaveLink(race); err == nil || !strings.Contains(err.Error(), "idempotent") {
+		t.Fatalf("want idempotency error for race+Toggle, got %v", err)
+	}
+
+	race.TargetMethod = "Switch.Set"
+	race.TargetParams = map[string]any{"id": 0, "on": true}
+	if _, err := m.SaveLink(race); err != nil {
+		t.Fatalf("race with Switch.Set should save: %v", err)
+	}
+
+	bad := base
+	bad.TargetMethod = "Switch.Set"
+	bad.Fallback = app.DefaultFallback()
+	bad.Fallback.Strategy = "sometimes"
+	if _, err := m.SaveLink(bad); err == nil || !strings.Contains(err.Error(), "unknown link strategy") {
+		t.Fatalf("want unknown-strategy error, got %v", err)
+	}
+}

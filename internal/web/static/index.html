@@ -95,6 +95,12 @@
             <label class="check">
               <input name="ble_enabled" type="checkbox" checked> BLE fallback
             </label>
+            <label>Strategy
+              <select name="strategy">
+                <option value="fallback" selected>Fallback — LAN first, BLE on failure (any method)</option>
+                <option value="race">Race — fire LAN + BLE together (idempotent methods only)</option>
+              </select>
+            </label>
           </div>
           <div class="form-actions">
             <button type="submit" class="btn primary">Save link</button>

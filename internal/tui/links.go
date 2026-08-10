@@ -37,6 +37,7 @@ const (
 	wStepMethod
 	wStepParams
 	wStepBLE
+	wStepStrategy
 	wStepCount
 )
 
@@ -51,6 +52,7 @@ type linkWizard struct {
 	method    textField
 	params    textField
 	ble       bool
+	race      bool
 	errText   string
 }
 
@@ -144,6 +146,9 @@ func (l *linksModel) refresh() {
 		ble := "off"
 		if lk.Fallback.BLEEnabled {
 			ble = "on"
+			if lk.Fallback.Strategy == app.StrategyRace {
+				ble = "race"
+			}
 		}
 		script := "not deployed"
 		if lk.DeployedScriptID != 0 {
@@ -286,7 +291,7 @@ func (l linksModel) updateWizard(msg tea.KeyMsg) (linksModel, tea.Cmd) {
 		}
 		return l, nil
 	case "enter":
-		if w.step < wStepBLE {
+		if w.step < wStepStrategy {
 			w.step++
 			l.syncWizardFocus()
 			return l, nil
@@ -331,6 +336,12 @@ func (l linksModel) updateWizard(msg tea.KeyMsg) (linksModel, tea.Cmd) {
 		switch msg.String() {
 		case " ", "left", "right", "h", "l":
 			w.ble = !w.ble
+		}
+		return l, nil
+	case wStepStrategy:
+		switch msg.String() {
+		case " ", "left", "right", "h", "l":
+			w.race = !w.race
 		}
 		return l, nil
 	}
@@ -398,6 +409,16 @@ func (l linksModel) finishWizard() (linksModel, tea.Cmd) {
 	}
 	fb := app.DefaultFallback()
 	fb.BLEEnabled = w.ble
+	fb.Strategy = app.StrategyFallback
+	if w.race {
+		fb.Strategy = app.StrategyRace
+		if app.NonIdempotentMethod(method) {
+			w.errText = "race strategy needs an idempotent method (a Toggle over both LAN and BLE undoes itself) — use e.g. Switch.Set, or the fallback strategy"
+			w.step = wStepMethod
+			l.syncWizardFocus()
+			return l, nil
+		}
+	}
 
 	link := app.Link{
 		Name:            name,
@@ -495,6 +516,14 @@ func (l linksModel) viewWizard() string {
 		ble = styleCursor.Render("< " + ble + " >")
 	}
 	line(wStepBLE, "BLE fallback:", ble)
+	strategy := "fallback (LAN first, BLE on failure)"
+	if w.race {
+		strategy = "race (LAN + BLE together, idempotent methods only)"
+	}
+	if w.step == wStepStrategy {
+		strategy = styleCursor.Render("< " + strategy + " >")
+	}
+	line(wStepStrategy, "Strategy:", strategy)
 
 	if w.errText != "" {
 		b.WriteString("\n" + styleErrText.Render(w.errText) + "\n")

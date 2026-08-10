@@ -9,6 +9,7 @@ let CONFIG = {
   targetIp: "192.168.1.42",
   method: "Switch.Toggle",
   params: {"id":0},
+  strategy: "fallback",
   bleEnabled: true,
   bleMac: "AA:BB:CC:DD:EE:FF",
   baseTimeoutMs: 400,
@@ -19,6 +20,14 @@ let CONFIG = {
 
 let ewmaMs = 0;  // EWMA of successful LAN round-trips (ms); 0 = no samples yet
 let attempt = 0; // per-attempt token: late callbacks from older attempts are ignored
+
+function recordRtt(rtt) {
+  if (ewmaMs <= 0) {
+    ewmaMs = rtt;
+  } else {
+    ewmaMs = 0.3 * rtt + 0.7 * ewmaMs;
+  }
+}
 
 function adaptiveTimeoutMs() {
   if (ewmaMs <= 0) return CONFIG.baseTimeoutMs;
@@ -67,11 +76,7 @@ function onTrigger() {
     done = true;
     let rtt = Date.now() - start;
     if (err_code === 0 && res && res.code === 200) {
-      if (ewmaMs <= 0) {
-        ewmaMs = rtt;
-      } else {
-        ewmaMs = 0.3 * rtt + 0.7 * ewmaMs;
-      }
+      recordRtt(rtt);
       print("shellyctl[" + CONFIG.linkId + "]: LAN ok in " + rtt + "ms (ewma " + ((ewmaMs + 0.5) | 0) + "ms)");
     } else {
       print("shellyctl[" + CONFIG.linkId + "]: LAN failed after " + rtt + "ms: " + (err_msg ? err_msg : "HTTP " + (res ? JSON.stringify(res.code) : "?")));

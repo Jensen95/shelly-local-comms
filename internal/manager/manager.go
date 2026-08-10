@@ -187,6 +187,16 @@ func (m *Manager) SaveLink(l app.Link) (app.Link, error) {
 	if l.Fallback == (app.FallbackConfig{}) {
 		l.Fallback = app.DefaultFallback()
 	}
+	switch l.Fallback.Strategy {
+	case "", app.StrategyFallback:
+	case app.StrategyRace:
+		if app.NonIdempotentMethod(l.TargetMethod) {
+			return app.Link{}, fmt.Errorf("strategy %q needs an idempotent target method: %q may run on both the LAN and BLE path and would undo itself — use an explicit method like Switch.Set, or strategy %q",
+				app.StrategyRace, l.TargetMethod, app.StrategyFallback)
+		}
+	default:
+		return app.Link{}, fmt.Errorf("unknown link strategy %q (want %q or %q)", l.Fallback.Strategy, app.StrategyFallback, app.StrategyRace)
+	}
 	if l.Name == "" {
 		l.Name = l.SourceDevice + " → " + l.TargetDevice
 	}

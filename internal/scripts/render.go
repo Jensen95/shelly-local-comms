@@ -48,7 +48,11 @@ type tmplData struct {
 	ParamsJSON      string
 	// BLETier is true when the BLE fallback code should be emitted:
 	// fallback enabled AND the target's BLE MAC is known.
-	BLETier        bool
+	BLETier bool
+	// Race is true when both transports fire simultaneously instead of
+	// LAN-first-with-fallback. Only emitted when BLETier is also true —
+	// with a single transport there is nothing to race.
+	Race           bool
 	BaseTimeoutMs  int
 	MaxTimeoutMs   int
 	LatencyFactor  float64
@@ -92,6 +96,16 @@ func Render(p Params) (string, error) {
 	if len(missing) > 0 {
 		return "", fmt.Errorf("scripts: missing required fields: %s", strings.Join(missing, ", "))
 	}
+	switch p.Fallback.Strategy {
+	case "", app.StrategyFallback:
+	case app.StrategyRace:
+		if app.NonIdempotentMethod(p.TargetMethod) {
+			return "", fmt.Errorf("scripts: strategy %q requires an idempotent target method, but %q is toggle-style: both transports may deliver and the second call would undo the first — use %q or an explicit method like Switch.Set",
+				app.StrategyRace, p.TargetMethod, app.StrategyFallback)
+		}
+	default:
+		return "", fmt.Errorf("scripts: unknown strategy %q (want %q or %q)", p.Fallback.Strategy, app.StrategyFallback, app.StrategyRace)
+	}
 
 	paramsJSON := "null"
 	if p.TargetParams != nil {
@@ -131,6 +145,7 @@ func Render(p Params) (string, error) {
 		TargetMethod:    p.TargetMethod,
 		ParamsJSON:      paramsJSON,
 		BLETier:         fb.BLEEnabled && p.TargetBLEMAC != "",
+		Race:            fb.Strategy == app.StrategyRace && fb.BLEEnabled && p.TargetBLEMAC != "",
 		BaseTimeoutMs:   fb.BaseTimeoutMs,
 		MaxTimeoutMs:    fb.MaxTimeoutMs,
 		LatencyFactor:   fb.LatencyFactor,
@@ -160,6 +175,7 @@ let CONFIG = {
   targetIp: {{js .TargetAddr}},
   method: {{js .TargetMethod}},
   params: {{.ParamsJSON}},
+  strategy: {{if .Race}}"race"{{else}}"fallback"{{end}},
   bleEnabled: {{.BLETier}},
   bleMac: {{js .TargetBLEMAC}},
   baseTimeoutMs: {{.BaseTimeoutMs}},
@@ -171,6 +187,53 @@ let CONFIG = {
 let ewmaMs = 0;  // EWMA of successful LAN round-trips (ms); 0 = no samples yet
 let attempt = 0; // per-attempt token: late callbacks from older attempts are ignored
 
+function recordRtt(rtt) {
+  if (ewmaMs <= 0) {
+    ewmaMs = rtt;
+  } else {
+    ewmaMs = 0.3 * rtt + 0.7 * ewmaMs;
+  }
+}
+{{if .Race}}
+// Race strategy: the target action is idempotent, so LAN and BLE fire
+// simultaneously; the faster path wins and the duplicate is harmless.
+function onTrigger() {
+  attempt++;
+  let token = attempt;
+  let winner = "";
+  let start = Date.now();
+  print("shellyctl[" + CONFIG.linkId + "]: trigger " + CONFIG.srcComponent + "/" + CONFIG.srcEvent + ", racing LAN + BLE");
+  Shelly.call("HTTP.POST", {
+    url: "http://" + CONFIG.targetIp + "/rpc",
+    body: JSON.stringify({ id: 1, src: "shellyctl-link", method: CONFIG.method, params: CONFIG.params }),
+    timeout: CONFIG.httpTimeoutSec
+  }, function (res, err_code, err_msg) {
+    if (token !== attempt) return;
+    let rtt = Date.now() - start;
+    if (err_code === 0 && res && res.code === 200) {
+      recordRtt(rtt);
+      if (winner === "") winner = "lan";
+      print("shellyctl[" + CONFIG.linkId + "]: LAN ok in " + rtt + "ms" + (winner === "lan" ? " (won)" : ""));
+    } else {
+      print("shellyctl[" + CONFIG.linkId + "]: LAN failed after " + rtt + "ms: " + (err_msg ? err_msg : "HTTP " + (res ? JSON.stringify(res.code) : "?")));
+    }
+  });
+  if (typeof BLE !== "undefined" && BLE.RPC && typeof BLE.RPC.call === "function") {
+    BLE.RPC.call(CONFIG.bleMac, CONFIG.method, CONFIG.params, function (res, err_code, err_msg) {
+      if (token !== attempt) return;
+      let rtt = Date.now() - start;
+      if (err_code === 0) {
+        if (winner === "") winner = "ble";
+        print("shellyctl[" + CONFIG.linkId + "]: BLE ok in " + rtt + "ms" + (winner === "ble" ? " (won)" : ""));
+      } else {
+        print("shellyctl[" + CONFIG.linkId + "]: BLE failed: " + err_msg);
+      }
+    });
+  } else {
+    print("shellyctl[" + CONFIG.linkId + "]: this firmware does not expose BLE RPC to scripts; race degrades to LAN only");
+  }
+}
+{{else}}
 function adaptiveTimeoutMs() {
   if (ewmaMs <= 0) return CONFIG.baseTimeoutMs;
   let t = ewmaMs * CONFIG.latencyFactor;
@@ -222,11 +285,7 @@ function onTrigger() {
     done = true;
     let rtt = Date.now() - start;
     if (err_code === 0 && res && res.code === 200) {
-      if (ewmaMs <= 0) {
-        ewmaMs = rtt;
-      } else {
-        ewmaMs = 0.3 * rtt + 0.7 * ewmaMs;
-      }
+      recordRtt(rtt);
       print("shellyctl[" + CONFIG.linkId + "]: LAN ok in " + rtt + "ms (ewma " + ((ewmaMs + 0.5) | 0) + "ms)");
     } else {
       print("shellyctl[" + CONFIG.linkId + "]: LAN failed after " + rtt + "ms: " + (err_msg ? err_msg : "HTTP " + (res ? JSON.stringify(res.code) : "?")));
@@ -234,7 +293,7 @@ function onTrigger() {
     }
   });
 }
-
+{{end}}
 Shelly.addEventHandler(function (event) {
   if (!event || !event.info) return;
   if (event.component === CONFIG.srcComponent && event.info.event === CONFIG.srcEvent) {

@@ -4,6 +4,7 @@
 package app
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Jensen95/shelly-local-comms/internal/shelly"
@@ -42,9 +43,24 @@ type Link struct {
 	DeployedAt time.Time `json:"deployed_at,omitzero"`
 }
 
+// Trigger strategies for the generated on-device script.
+const (
+	// StrategyFallback tries LAN first and falls back to BLE on
+	// failure/timeout. Safe for any target method. The default.
+	StrategyFallback = "fallback"
+	// StrategyRace fires LAN and BLE simultaneously; the faster path
+	// wins and the slower duplicate is harmless. Requires an IDEMPOTENT
+	// target method (e.g. Switch.Set with explicit params) — toggle-style
+	// methods would cancel themselves out when both paths deliver.
+	StrategyRace = "race"
+)
+
 // FallbackConfig controls how the generated on-device script decides to
 // fail over from LAN RPC to BLE RPC.
 type FallbackConfig struct {
+	// Strategy is StrategyFallback (also the meaning of "") or
+	// StrategyRace.
+	Strategy string `json:"strategy,omitempty"`
 	// BLEEnabled enables the BLE RPC fallback tier. Requires the target's
 	// BLE MAC to be known and firmware exposing BLE RPC to scripts.
 	BLEEnabled bool `json:"ble_enabled"`
@@ -58,10 +74,17 @@ type FallbackConfig struct {
 	LatencyFactor float64 `json:"latency_factor"`
 }
 
-// DefaultFallback returns sane failover tuning: 400ms floor, 1.5s cap,
-// timeout tracking at 4x observed round-trip latency.
+// DefaultFallback returns sane failover tuning: sequential LAN→BLE, 400ms
+// floor, 1.5s cap, timeout tracking at 4x observed round-trip latency.
 func DefaultFallback() FallbackConfig {
 	return FallbackConfig{BLEEnabled: true, BaseTimeoutMs: 400, MaxTimeoutMs: 1500, LatencyFactor: 4}
+}
+
+// NonIdempotentMethod reports whether an RPC method is known to be unsafe
+// for StrategyRace: when both the LAN and BLE path deliver, a
+// toggle-style method executes twice and cancels itself out.
+func NonIdempotentMethod(method string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(method)), ".toggle")
 }
 
 // MQTTSettings is the broker configuration applied to devices in bulk.
