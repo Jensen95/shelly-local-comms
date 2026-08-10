@@ -9,10 +9,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jensen95/shelly-local-comms/internal/app"
 	"github.com/Jensen95/shelly-local-comms/internal/d2d"
+	"github.com/Jensen95/shelly-local-comms/internal/mqttdisc"
 	"github.com/Jensen95/shelly-local-comms/internal/settings"
 	"github.com/Jensen95/shelly-local-comms/internal/shelly"
 	"github.com/Jensen95/shelly-local-comms/internal/transport"
@@ -37,6 +41,9 @@ type Manager struct {
 	discoverEvery time.Duration
 	// discoverFn is shelly.Discover in production; tests inject a fake.
 	discoverFn func(ctx context.Context, timeout time.Duration) ([]shelly.Device, error)
+	// mqtt is the announce-discovery service, nil when no broker is
+	// configured at construction time.
+	mqtt *mqttdisc.Service
 }
 
 var _ app.Manager = (*Manager)(nil)
@@ -63,16 +70,51 @@ func New(store *app.Store, opts ...Option) *Manager {
 	m.prober = transport.NewProber(m.callerFor)
 	m.deployer = d2d.NewDeployer(m.callerFor)
 	m.prober.SetDevices(store.Config().Devices)
+	if s := store.Config().MQTT; s.Enable && s.Server != "" {
+		m.mqtt = mqttdisc.NewService(s, m.mergeAnnounced)
+	}
 	return m
 }
 
-// Start launches background work until ctx ends: the latency probe loop
-// and, unless disabled, periodic device auto-discovery.
+// Start launches background work until ctx ends: the latency probe loop,
+// periodic mDNS auto-discovery (unless disabled), and — when a broker has
+// been applied — MQTT announce-based discovery, which also finds devices
+// on subnets mDNS cannot cross.
 func (m *Manager) Start(ctx context.Context) {
 	go m.prober.Run(ctx)
 	if m.discoverEvery > 0 {
 		go m.autoDiscover(ctx)
 	}
+	if m.mqtt != nil {
+		go func() { _ = m.mqtt.Run(ctx) }()
+	}
+}
+
+// mergeAnnounced registers a device reported by MQTT announce-discovery.
+// A known device only gets its address refreshed (announce payloads carry
+// no auth flag or name, so the stored full DeviceInfo stays). An unknown
+// device is enriched over HTTP first so AuthEnabled and friends are
+// accurate; if that fails the announce data is still good enough to list
+// it.
+func (m *Manager) mergeAnnounced(d shelly.Device) {
+	if _, known := m.deviceByKey(d.Key()); !known {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if info, err := shelly.NewClient(d.Addr).GetDeviceInfo(ctx); err == nil {
+			d.Info = info
+		}
+		cancel()
+	}
+	_ = m.store.Update(func(c *app.Config) error {
+		for i := range c.Devices {
+			if c.Devices[i].Key() == d.Key() {
+				c.Devices[i].Addr = d.Addr
+				return nil
+			}
+		}
+		c.Devices = append(c.Devices, d)
+		return nil
+	})
+	m.prober.SetDevices(m.store.Config().Devices)
 }
 
 // autoDiscover sweeps the LAN immediately and then on every tick, merging
@@ -131,6 +173,12 @@ func (m *Manager) Discover(ctx context.Context, timeoutSeconds int) ([]shelly.De
 	// via the web API, an HTTP handler) for arbitrarily long.
 	if timeoutSeconds > maxDiscoverSeconds {
 		timeoutSeconds = maxDiscoverSeconds
+	}
+	// A refresh should sweep every channel: re-solicit MQTT announces too.
+	// Their responses arrive asynchronously via mergeAnnounced, so only
+	// the mDNS finds are in this call's return value.
+	if m.mqtt != nil {
+		m.mqtt.RequestAnnounce()
 	}
 	found, err := m.discoverFn(ctx, time.Duration(timeoutSeconds)*time.Second)
 	if err != nil {
@@ -410,6 +458,14 @@ func (m *Manager) ApplyMQTT(ctx context.Context, s app.MQTTSettings, keys []stri
 	if err != nil {
 		return err
 	}
+	// Remember the broker: Start uses it for MQTT announce-discovery
+	// (picked up on the next start of the tool).
+	if err := m.store.Update(func(c *app.Config) error {
+		c.MQTT = s
+		return nil
+	}); err != nil {
+		return err
+	}
 	return collectResults(ctx, callers, settings.ApplyMQTTBulk(ctx, callers, s))
 }
 
@@ -480,6 +536,79 @@ func (m *Manager) JoinExtender(ctx context.Context, edgeKey, extenderKey string)
 		return settings.Reboot(ctx, edgeCaller)
 	}
 	return nil
+}
+
+// RSSI thresholds (dBm) for extender suggestions: a device at or below
+// weakRSSI needs help; a candidate must be at least minCandidateRSSI and
+// meaningfully stronger than the edge device to be worth suggesting.
+const (
+	weakRSSI         = -70
+	minCandidateRSSI = -65
+	minRSSIGain      = 10
+)
+
+// SuggestExtenders reads every device's WiFi RSSI concurrently and pairs
+// each weak-signal device with the strongest-signal device. RSSI measures
+// signal to the router, not proximity between the two devices, so this is
+// a heuristic starting point — the UIs say as much.
+func (m *Manager) SuggestExtenders(ctx context.Context) ([]app.ExtenderSuggestion, error) {
+	devices := m.store.Config().Devices
+	type reading struct {
+		key  string
+		rssi int
+	}
+	readings := make([]reading, len(devices))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	var okCount atomic.Int64
+	for i, d := range devices {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			st, err := settings.GetWiFiStatus(ctx, m.callerFor(d.Addr))
+			if err != nil {
+				readings[i] = reading{key: "", rssi: 0} // unreachable: skip
+				return
+			}
+			okCount.Add(1)
+			readings[i] = reading{key: d.Key(), rssi: st.RSSI}
+		}()
+	}
+	wg.Wait()
+	if okCount.Load() == 0 && len(devices) > 0 {
+		return nil, errors.New("no device answered WiFi.GetStatus — cannot measure signal strength")
+	}
+
+	best := reading{}
+	for _, r := range readings {
+		if r.key == "" {
+			continue
+		}
+		if best.key == "" || r.rssi > best.rssi {
+			best = r
+		}
+	}
+
+	var out []app.ExtenderSuggestion
+	for _, r := range readings {
+		if r.key == "" || r.rssi > weakRSSI {
+			continue
+		}
+		if best.key == "" || best.key == r.key {
+			continue
+		}
+		if best.rssi < minCandidateRSSI || best.rssi-r.rssi < minRSSIGain {
+			continue
+		}
+		out = append(out, app.ExtenderSuggestion{
+			Edge: r.key, EdgeRSSI: r.rssi,
+			Extender: best.key, ExtenderRSSI: best.rssi,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].EdgeRSSI < out[j].EdgeRSSI })
+	return out, nil
 }
 
 // --- Health ---

@@ -139,6 +139,10 @@ func (s settingsModel) update(msg tea.Msg) (settingsModel, tea.Cmd) {
 		s.busy = false
 		s.setSectionResult(sectionExtender, fmt.Sprintf("%s joined extender %s", msg.edgeKey, msg.extenderKey), msg.err)
 		return s, nil
+	case extenderSuggestMsg:
+		s.busy = false
+		s.setSectionResult(sectionExtender, formatSuggestions(msg.suggestions), msg.err)
+		return s, nil
 	case tea.KeyMsg:
 		switch s.mode {
 		case setModeMenu:
@@ -341,14 +345,27 @@ func (s settingsModel) updateBLE(msg tea.KeyMsg) (settingsModel, tea.Cmd) {
 // --- Range extender flows ---
 
 func (s settingsModel) updateExtMenu(msg tea.KeyMsg) (settingsModel, tea.Cmd) {
+	const extMenuEntries = 3
 	switch msg.String() {
 	case "esc":
 		s.mode = setModeMenu
 	case "up", "k":
-		s.extMenuCursor = 0
+		if s.extMenuCursor > 0 {
+			s.extMenuCursor--
+		}
 	case "down", "j":
-		s.extMenuCursor = 1
+		if s.extMenuCursor < extMenuEntries-1 {
+			s.extMenuCursor++
+		}
 	case "enter":
+		if s.extMenuCursor == 2 {
+			s.busy = true
+			mgr := s.mgr
+			return s, tea.Batch(s.spin.Tick, func() tea.Msg {
+				sugg, err := mgr.SuggestExtenders(context.Background())
+				return extenderSuggestMsg{suggestions: sugg, err: err}
+			})
+		}
 		s.devices = s.mgr.Devices()
 		s.devCursor = 0
 		if len(s.devices) == 0 {
@@ -363,6 +380,18 @@ func (s settingsModel) updateExtMenu(msg tea.KeyMsg) (settingsModel, tea.Cmd) {
 		}
 	}
 	return s, nil
+}
+
+// formatSuggestions renders extender suggestions into one status line.
+func formatSuggestions(sugg []app.ExtenderSuggestion) string {
+	if len(sugg) == 0 {
+		return "no suggestions: every reachable device has decent WiFi signal"
+	}
+	parts := make([]string, len(sugg))
+	for i, sg := range sugg {
+		parts[i] = fmt.Sprintf("%s (%d dBm) <- extender %s (%d dBm)", sg.Edge, sg.EdgeRSSI, sg.Extender, sg.ExtenderRSSI)
+	}
+	return "suggestions (RSSI is signal to the router, not device proximity): " + strings.Join(parts, " · ")
 }
 
 func (s settingsModel) updateDevicePick(msg tea.KeyMsg) (settingsModel, tea.Cmd) {
@@ -560,6 +589,7 @@ func (s settingsModel) viewExtMenu() string {
 	entries := []string{
 		"Toggle range extender AP on a device",
 		"Pair an edge device to an extender",
+		"Suggest pairings from WiFi signal strength",
 	}
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("Range extender") + "\n\n")

@@ -107,6 +107,17 @@ type BLESettings struct {
 	Observer bool `json:"observer"`
 }
 
+// ExtenderSuggestion pairs a device with weak WiFi signal with a
+// well-placed device that could bridge it via the range-extender AP.
+// RSSI is signal strength to the router, not distance between the two
+// devices — treat the suggestion as a starting point, not ground truth.
+type ExtenderSuggestion struct {
+	Edge         string `json:"edge"`
+	EdgeRSSI     int    `json:"edge_rssi"`
+	Extender     string `json:"extender"`
+	ExtenderRSSI int    `json:"extender_rssi"`
+}
+
 // LatencyStats is the manager's health view of one device on the LAN.
 type LatencyStats struct {
 	Device      string        `json:"device"`
@@ -127,4 +138,8 @@ type Config struct {
 	Links   []Link          `json:"links"`
 	// Passwords maps Device.Key() to the device password. Local file only.
 	Passwords map[string]string `json:"passwords,omitempty"`
+	// MQTT is the last broker configuration applied to devices. When its
+	// Server is set the manager also connects to that broker itself and
+	// discovers devices from their announce messages.
+	MQTT MQTTSettings `json:"mqtt,omitzero"`
 }

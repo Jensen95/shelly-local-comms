@@ -73,3 +73,8 @@ type extenderJoinedMsg struct {
 	extenderKey string
 	err         error
 }
+
+type extenderSuggestMsg struct {
+	suggestions []app.ExtenderSuggestion
+	err         error
+}

@@ -21,6 +21,7 @@ type fakeDevice struct {
 	calls    []string
 	scriptID int
 	running  bool
+	rssi     int
 }
 
 func (f *fakeDevice) handler() http.HandlerFunc {
@@ -60,6 +61,8 @@ func (f *fakeDevice) handler() http.HandlerFunc {
 			result = map[string]any{"ap": map[string]any{
 				"ssid": f.id, "enable": false, "range_extender": map[string]any{"enable": false},
 			}}
+		case "WiFi.GetStatus":
+			result = map[string]any{"sta_ip": "192.0.2.1", "status": "got ip", "ssid": "home", "rssi": f.rssi}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": req.ID, "src": f.id, "result": result})
 	}
@@ -337,5 +340,115 @@ func TestDiscoverClampsTimeout(t *testing.T) {
 	}
 	if gotTimeout != maxDiscoverSeconds*time.Second {
 		t.Fatalf("timeout = %v, want clamped to %ds", gotTimeout, maxDiscoverSeconds)
+	}
+}
+
+func addFakeDevice(t *testing.T, m *Manager, id string, rssi int) {
+	t.Helper()
+	f := &fakeDevice{t: t, id: id, rssi: rssi}
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+	if _, err := m.AddDevice(context.Background(), strings.TrimPrefix(srv.URL, "http://"), ""); err != nil {
+		t.Fatalf("add %s: %v", id, err)
+	}
+}
+
+func TestSuggestExtendersPairsWeakWithStrongest(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	addFakeDevice(t, m, "shelly-strong", -48)
+	addFakeDevice(t, m, "shelly-mid", -62)
+	addFakeDevice(t, m, "shelly-weak", -81)
+	addFakeDevice(t, m, "shelly-weaker", -88)
+
+	sugg, err := m.SuggestExtenders(context.Background())
+	if err != nil {
+		t.Fatalf("SuggestExtenders: %v", err)
+	}
+	if len(sugg) != 2 {
+		t.Fatalf("suggestions = %+v, want 2", sugg)
+	}
+	// Sorted worst signal first, both paired with the strongest device.
+	if sugg[0].Edge != "shelly-weaker" || sugg[1].Edge != "shelly-weak" {
+		t.Errorf("edge order = %s, %s; want shelly-weaker first", sugg[0].Edge, sugg[1].Edge)
+	}
+	for _, s := range sugg {
+		if s.Extender != "shelly-strong" {
+			t.Errorf("suggested extender for %s = %s, want shelly-strong", s.Edge, s.Extender)
+		}
+	}
+}
+
+func TestSuggestExtendersNoWeakDevices(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	addFakeDevice(t, m, "shelly-a", -50)
+	addFakeDevice(t, m, "shelly-b", -60)
+
+	sugg, err := m.SuggestExtenders(context.Background())
+	if err != nil {
+		t.Fatalf("SuggestExtenders: %v", err)
+	}
+	if len(sugg) != 0 {
+		t.Fatalf("suggestions = %+v, want none", sugg)
+	}
+}
+
+func TestMergeAnnouncedUpdatesAddrOnly(t *testing.T) {
+	m, _ := newTestManager(t)
+	before, _ := m.deviceByKey("shelly-tgt")
+
+	m.mergeAnnounced(shelly.Device{
+		Addr:   "192.0.2.77",
+		Source: "mqtt",
+		Info:   shelly.DeviceInfo{ID: "shelly-tgt", Gen: 2, MAC: "FFEEDD"},
+	})
+
+	after, ok := m.deviceByKey("shelly-tgt")
+	if !ok {
+		t.Fatal("device vanished after announce merge")
+	}
+	if after.Addr != "192.0.2.77" {
+		t.Errorf("Addr = %q, want announce address", after.Addr)
+	}
+	if after.Info != before.Info || after.Source != before.Source {
+		t.Errorf("announce merge must only touch Addr; before %+v after %+v", before, after)
+	}
+	if got := len(m.Devices()); got != 2 {
+		t.Fatalf("device count = %d, want 2", got)
+	}
+}
+
+func TestMergeAnnouncedEnrichesNewDevice(t *testing.T) {
+	store, err := app.OpenStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(store, WithDiscoveryInterval(0))
+	f := &fakeDevice{t: t, id: "shelly-mq"}
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+
+	m.mergeAnnounced(shelly.Device{
+		Addr:   strings.TrimPrefix(srv.URL, "http://"),
+		Source: "mqtt",
+		Info:   shelly.DeviceInfo{ID: "shelly-mq", Gen: 2},
+	})
+
+	devs := m.Devices()
+	if len(devs) != 1 {
+		t.Fatalf("want 1 device, got %d", len(devs))
+	}
+	if devs[0].Info.Model != "SNSW-001X16EU" {
+		t.Errorf("announced device was not enriched over HTTP: %+v", devs[0].Info)
+	}
+	if devs[0].Source != "mqtt" {
+		t.Errorf("Source = %q, want mqtt", devs[0].Source)
 	}
 }

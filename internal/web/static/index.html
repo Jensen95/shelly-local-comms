@@ -196,8 +196,12 @@
               <select name="edge" data-devices required></select>
             </label>
           </div>
-          <div class="form-actions"><button type="submit" class="btn primary">Join</button></div>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">Join</button>
+            <button type="button" id="suggest-btn" class="btn">Suggest pairings</button>
+          </div>
         </form>
+        <div id="suggestions" class="muted"></div>
       </div>
     </section>
   </main>

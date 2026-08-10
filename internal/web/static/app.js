@@ -487,6 +487,39 @@ $("#join-form").addEventListener("submit", async (ev) => {
   }
 });
 
+$("#suggest-btn").addEventListener("click", async () => {
+  const btn = $("#suggest-btn");
+  const box = $("#suggestions");
+  btn.disabled = true;
+  box.textContent = "Reading WiFi signal strength from all devices…";
+  try {
+    const sugg = await api("/api/settings/extender/suggestions");
+    box.replaceChildren();
+    if (sugg.length === 0) {
+      box.textContent = "No suggestions — every reachable device has decent WiFi signal.";
+      return;
+    }
+    box.append(el("p", {},
+      "RSSI measures signal to the router, not distance between devices — treat these as starting points. Click one to prefill the form:"));
+    for (const s of sugg) {
+      box.append(el("button", {
+        class: "btn small",
+        onclick: () => {
+          const form = $("#join-form");
+          form.elements.edge.value = s.edge;
+          form.elements.extender.value = s.extender;
+          toast(`Prefilled: ${s.edge} via ${s.extender}`);
+        },
+      }, `${s.edge} (${s.edge_rssi} dBm) ← ${s.extender} (${s.extender_rssi} dBm)`));
+    }
+  } catch (err) {
+    box.textContent = "";
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 /* ---------- boot ---------- */
 
 (async function boot() {

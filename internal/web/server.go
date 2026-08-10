@@ -50,6 +50,7 @@ func NewServer(m app.Manager) http.Handler {
 	mux.HandleFunc("POST /api/settings/ble", s.applyBLE)
 	mux.HandleFunc("POST /api/settings/extender", s.rangeExtender)
 	mux.HandleFunc("POST /api/settings/extender/join", s.joinExtender)
+	mux.HandleFunc("GET /api/settings/extender/suggestions", s.suggestExtenders)
 
 	// Unknown /api paths get a JSON 404 instead of the SPA fallback.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +333,18 @@ func (s *server) joinExtender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "joined"})
+}
+
+func (s *server) suggestExtenders(w http.ResponseWriter, r *http.Request) {
+	sugg, err := s.m.SuggestExtenders(r.Context())
+	if err != nil {
+		writeManagerError(w, err)
+		return
+	}
+	if sugg == nil {
+		sugg = []app.ExtenderSuggestion{}
+	}
+	writeJSON(w, http.StatusOK, sugg)
 }
 
 // --- Helpers ---

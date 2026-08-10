@@ -160,3 +160,19 @@ func JoinExtender(ctx context.Context, edge shelly.Caller, ap APInfo) (bool, err
 	}
 	return setConfig(ctx, edge, "WiFi.SetConfig", map[string]any{"sta1": sta1})
 }
+
+// WiFiStatus mirrors the result of WiFi.GetStatus.
+type WiFiStatus struct {
+	StaIP  string `json:"sta_ip"`
+	Status string `json:"status"` // e.g. "got ip"
+	SSID   string `json:"ssid"`
+	RSSI   int    `json:"rssi"` // dBm, negative; closer to 0 is stronger
+}
+
+// GetWiFiStatus fetches the device's current WiFi station status,
+// including the signal strength used for range-extender suggestions.
+func GetWiFiStatus(ctx context.Context, c shelly.Caller) (WiFiStatus, error) {
+	var st WiFiStatus
+	err := c.Call(ctx, "WiFi.GetStatus", nil, &st)
+	return st, err
+}

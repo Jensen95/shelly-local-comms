@@ -35,7 +35,8 @@ UI) over one shared core.
 | `internal/transport` | Latency prober: periodic health probes, EWMA stats, degradation detection feeding timeout tuning |
 | `internal/scripts` | mJS templates for on-device link scripts (LAN→BLE fallback with adaptive timeout) |
 | `internal/d2d` | Link lifecycle: render script from a `Link`, deploy via `Script.*` RPCs, verify, undeploy |
-| `internal/settings` | Bulk settings: `MQTT.SetConfig`, `BLE.SetConfig` (incl. observer), `WiFi.SetConfig` range extender + edge join |
+| `internal/settings` | Bulk settings: `MQTT.SetConfig`, `BLE.SetConfig` (incl. observer), `WiFi.SetConfig` range extender + edge join, `WiFi.GetStatus` RSSI reads |
+| `internal/mqttdisc` | MQTT announce-discovery: subscribes `+/announce`, `shellies/announce`, `+/online`; broadcasts `announce` to `shellies/command`; parses announces (with IP) into devices |
 | `internal/app` | Persisted config (JSON store) and the `Manager` facade both UIs consume |
 | `internal/tui` | Bubble Tea terminal UI |
 | `internal/web` | HTTP API + embedded static web UI (`go:embed`, no Node toolchain) |

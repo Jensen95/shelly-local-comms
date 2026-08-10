@@ -43,6 +43,7 @@ type fakeManager struct {
 	extenderEnable  bool
 	joinEdgeKey     string
 	joinExtenderKey string
+	suggestions     []app.ExtenderSuggestion
 }
 
 func (f *fakeManager) record(name string) { f.calls = append(f.calls, name) }
@@ -133,6 +134,14 @@ func (f *fakeManager) JoinExtender(ctx context.Context, edgeKey, extenderKey str
 	f.record("JoinExtender")
 	f.joinEdgeKey, f.joinExtenderKey = edgeKey, extenderKey
 	return f.err
+}
+
+func (f *fakeManager) SuggestExtenders(ctx context.Context) ([]app.ExtenderSuggestion, error) {
+	f.record("SuggestExtenders")
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.suggestions, nil
 }
 
 func (f *fakeManager) LatencyStats() []app.LatencyStats {
@@ -664,5 +673,32 @@ func TestStateChangingPostRejectsNonJSONContentType(t *testing.T) {
 	t.Cleanup(func() { _ = res.Body.Close() })
 	if res.StatusCode != http.StatusUnsupportedMediaType {
 		t.Fatalf("status = %d, want 415", res.StatusCode)
+	}
+}
+
+func TestExtenderSuggestions(t *testing.T) {
+	f := &fakeManager{suggestions: []app.ExtenderSuggestion{
+		{Edge: "shelly-weak", EdgeRSSI: -82, Extender: "shelly-strong", ExtenderRSSI: -50},
+	}}
+	ts := newTestServer(t, f)
+
+	res := do(t, ts, http.MethodGet, "/api/settings/extender/suggestions", "")
+	wantStatus(t, res, http.StatusOK)
+	got := decodeBody[[]app.ExtenderSuggestion](t, res)
+	if len(got) != 1 || got[0].Edge != "shelly-weak" || got[0].Extender != "shelly-strong" {
+		t.Fatalf("suggestions = %+v", got)
+	}
+}
+
+func TestExtenderSuggestionsEmptyIsArray(t *testing.T) {
+	ts := newTestServer(t, &fakeManager{})
+	res := do(t, ts, http.MethodGet, "/api/settings/extender/suggestions", "")
+	wantStatus(t, res, http.StatusOK)
+	var raw json.RawMessage
+	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != "[]" {
+		t.Fatalf("body = %s, want []", raw)
 	}
 }

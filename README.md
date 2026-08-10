@@ -14,7 +14,14 @@ Cloud, no Home Assistant required.
   well-placed Shelly's built-in range-extender access point.
 - **Auto-discovery**: devices are found via mDNS — on demand and with a
   background sweep (every 5 minutes by default, `-discover-interval` to
-  tune or disable) so new Shellys appear on their own.
+  tune or disable) so new Shellys appear on their own. Once a broker has
+  been applied, **MQTT announce-discovery** runs too: shellyctl asks all
+  devices on the broker to announce themselves (their announce includes
+  their IP), which also finds devices on subnets mDNS cannot cross. Every
+  manual Discover action re-sweeps both channels.
+- **Extender suggestions**: reads each device's WiFi signal strength
+  (RSSI) and suggests which well-placed device should bridge a
+  weak-signal one via the range-extender AP.
 - **Two frontends**: a terminal UI (`shellyctl tui`) and an embedded web UI
   (`shellyctl serve`), both over the same core.
 

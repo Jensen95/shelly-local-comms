@@ -46,7 +46,9 @@ type fakeManager struct {
 	extToggles [][2]string // key, enable
 	joins      [][2]string // edge, extender
 
-	probeCalls int
+	probeCalls   int
+	suggestCalls int
+	suggestions  []app.ExtenderSuggestion
 }
 
 var _ app.Manager = (*fakeManager)(nil)
@@ -138,6 +140,11 @@ func (f *fakeManager) EnableRangeExtender(ctx context.Context, key string, enabl
 func (f *fakeManager) JoinExtender(ctx context.Context, edgeKey, extenderKey string) error {
 	f.joins = append(f.joins, [2]string{edgeKey, extenderKey})
 	return nil
+}
+
+func (f *fakeManager) SuggestExtenders(ctx context.Context) ([]app.ExtenderSuggestion, error) {
+	f.suggestCalls++
+	return f.suggestions, nil
 }
 
 func (f *fakeManager) LatencyStats() []app.LatencyStats { return f.stats }
